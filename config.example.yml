@@ -1,0 +1,17 @@
+download_providers:
+  - host: news.example.com
+    port: 119
+    username: user
+    password: pass
+    ssl: true
+    max_connections: 10
+    max_connection_idle_time_in_seconds: 2400
+
+upload_providers:
+  - host: upload.example.com
+    port: 119
+    username: user
+    password: pass
+    ssl: true
+    max_connections: 5
+    max_connection_idle_time_in_seconds: 2400
