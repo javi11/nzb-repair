@@ -164,5 +164,11 @@ func downloadFile(filename, url string) error {
 		return err
 	}
 
+	// Add execute permissions to the downloaded file
+	err = os.Chmod(filename, 0755)
+	if err != nil {
+		return fmt.Errorf("error setting execute permission for %s: %w", filename, err)
+	}
+
 	return nil
 }

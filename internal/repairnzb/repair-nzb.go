@@ -3,6 +3,7 @@ package repairnzb
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,16 +17,18 @@ import (
 	"github.com/javi11/nntppool"
 	"github.com/javi11/nzb-repair/internal/config"
 	"github.com/k0kubun/go-ansi"
+	"github.com/mnightingale/rapidyenc"
 	"github.com/schollz/progressbar/v3"
 	"github.com/sourcegraph/conc/pool"
 )
 
 func RepairNzb(
 	ctx context.Context,
-	config config.Config,
+	cfg config.Config,
 	downloadPool nntppool.UsenetConnectionPool,
 	uploadPool nntppool.UsenetConnectionPool,
 	nzbFile string,
+	outputFile string,
 ) error {
 	content, err := os.Open(nzbFile)
 	if err != nil {
@@ -43,8 +46,8 @@ func RepairNzb(
 		return nil
 	}
 
-	brokenSegments := make([]nzbparser.NzbSegment, 0)
-	brokenSegmentCh := make(chan nzbparser.NzbSegment, 100)
+	brokenSegments := make(map[*nzbparser.NzbFile][]brokenSegment, 0)
+	brokenSegmentCh := make(chan brokenSegment, 100)
 
 	wg := &sync.WaitGroup{}
 	defer func() {
@@ -65,7 +68,11 @@ func RepairNzb(
 					return
 				}
 
-				brokenSegments = append(brokenSegments, s)
+				if _, ok := brokenSegments[s.file]; !ok {
+					brokenSegments[s.file] = make([]brokenSegment, 0)
+				}
+
+				brokenSegments[s.file] = append(brokenSegments[s.file], s)
 			}
 		}
 	}()
@@ -77,7 +84,7 @@ func RepairNzb(
 	}
 
 	firstFile := restFiles[0]
-	tmpFolder := filepath.Join(config.DownloadFolder, firstFile.Basefilename)
+	tmpFolder := filepath.Join(cfg.DownloadFolder, firstFile.Basefilename)
 	if err := os.MkdirAll(tmpFolder, 0755); err != nil {
 		if !errors.Is(err, os.ErrExist) {
 			slog.With("err", err).ErrorContext(ctx, "failed to create folder")
@@ -95,7 +102,7 @@ func RepairNzb(
 			return nil
 		}
 
-		err := downloadWorker(ctx, config, downloadPool, f, brokenSegmentCh, tmpFolder)
+		err := downloadWorker(ctx, cfg, downloadPool, f, brokenSegmentCh, tmpFolder)
 		if err != nil {
 			slog.With("err", err).ErrorContext(ctx, "failed to download file")
 		}
@@ -125,15 +132,190 @@ func RepairNzb(
 			return nil
 		}
 
-		err := downloadWorker(ctx, config, downloadPool, f, nil, tmpFolder)
+		err := downloadWorker(ctx, cfg, downloadPool, f, nil, tmpFolder)
 		if err != nil {
 			slog.With("err", err).InfoContext(ctx, "failed to download par2 file, cancelling repair")
 		}
 	}
 
-	err = par2repair(ctx, config.Par2Exe, tmpFolder)
+	err = par2repair(ctx, cfg.Par2Exe, tmpFolder)
 	if err != nil {
 		slog.With("err", err).ErrorContext(ctx, "failed to repair files")
+	}
+
+	// Upload repaired files
+	startTime = time.Now()
+
+	err = replaceBrokenSegments(ctx, brokenSegments, tmpFolder, cfg, uploadPool, nzb)
+	if err != nil {
+		slog.With("err", err).ErrorContext(ctx, "failed to upload repaired files")
+
+		return err
+	}
+
+	// write the repaired nzb file
+	var nzbFileName string
+	if outputFile != "" {
+		nzbFileName = outputFile
+	} else {
+		inputFileFolder := filepath.Dir(nzbFile)
+		nzbFileName = filepath.Join(inputFileFolder, fmt.Sprintf("%s.repaired.nzb", firstFile.Basefilename))
+	}
+
+	b, err := nzbparser.Write(nzb)
+	if err != nil {
+		slog.With("err", err).ErrorContext(ctx, "failed to write repaired nzb file")
+
+		return err
+	}
+
+	nzbFileHandle, err := os.Create(nzbFileName)
+	if err != nil {
+		slog.With("err", err).ErrorContext(ctx, "failed to create repaired nzb file")
+
+		return err
+	}
+
+	defer nzbFileHandle.Close()
+
+	if _, err := nzbFileHandle.Write(b); err != nil {
+		slog.With("err", err).ErrorContext(ctx, "failed to write repaired nzb file")
+
+		return err
+	}
+
+	slog.InfoContext(ctx, fmt.Sprintf("Repaired nzb file written to %s", nzbFileName))
+	slog.InfoContext(ctx, fmt.Sprintf("%d broken segments uploaded in %s", len(brokenSegments), time.Since(startTime)))
+	slog.InfoContext(ctx, "Repair completed successfully")
+
+	return nil
+}
+
+func replaceBrokenSegments(
+	ctx context.Context,
+	brokenSegments map[*nzbparser.NzbFile][]brokenSegment,
+	tmpFolder string,
+	cfg config.Config,
+	uploadPool nntppool.UsenetConnectionPool,
+	nzb *nzbparser.Nzb,
+) error {
+	encoder := rapidyenc.NewEncoder()
+
+	for nzbFile, bs := range brokenSegments {
+		if ctx.Err() != nil {
+			slog.ErrorContext(ctx, "repair canceled")
+
+			return nil
+		}
+
+		f, err := os.Open(filepath.Join(tmpFolder, nzbFile.Filename))
+		if err != nil {
+			slog.With("err", err).ErrorContext(ctx, "failed to open file")
+
+			return err
+		}
+
+		fs, err := f.Stat()
+		if err != nil {
+			slog.With("err", err).ErrorContext(ctx, "failed to get file info")
+
+			return err
+		}
+
+		fileSize := fs.Size()
+
+		p := pool.New().WithContext(ctx).
+			WithMaxGoroutines(cfg.UploadWorkers).
+			WithCancelOnError()
+
+		for _, s := range bs {
+			p.Go(func(ctx context.Context) error {
+				if ctx.Err() != nil {
+					slog.With("err", err).ErrorContext(ctx, "repair canceled")
+
+					return nil
+				}
+
+				// Get the segment from the file
+				buff := make([]byte, s.segment.Bytes)
+				_, err := f.ReadAt(buff, int64((s.segment.Number-1)*s.segment.Bytes))
+				if err != nil {
+					slog.With("err", err).ErrorContext(ctx, "failed to read segment")
+
+					return err
+				}
+
+				partSize := int64(s.segment.Bytes)
+				date := time.UnixMilli(int64(nzbFile.Date))
+
+				subject := fmt.Sprintf("[%v/%v] %v - \"\" yEnc (%v/%v)", s.file.Number, nzb.TotalFiles, s.file.Filename, int64(s.segment.Number), s.file.TotalSegments)
+
+				var fName string
+
+				if cfg.Upload.ObfuscationPolicy == config.ObfuscationPolicyNone {
+					fName = s.file.Filename
+				} else {
+					fName = rand.Text()
+					subject = rand.Text()
+				}
+
+				msgId := generateRandomMessageID()
+
+				ar := articleData{
+					PartNum:   int64(s.segment.Number),
+					PartTotal: fileSize / partSize,
+					PartSize:  partSize,
+					PartBegin: int64((s.segment.Number - 1) * s.segment.Bytes),
+					PartEnd:   int64(s.segment.Number * s.segment.Bytes),
+					FileNum:   s.file.Number,
+					FileTotal: 1,
+					FileSize:  fileSize,
+					Subject:   subject,
+					Poster:    nzbFile.Poster,
+					Groups:    nzbFile.Groups,
+					Filename:  fName,
+					Date:      &date,
+					body:      buff,
+					MsgId:     msgId,
+				}
+
+				r, err := ar.EncodeBytes(encoder)
+				if err != nil {
+					slog.With("err", err).ErrorContext(ctx, "failed to encode segment")
+
+					return err
+				}
+
+				// Upload the segment
+				err = uploadPool.Post(ctx, r)
+				if err != nil {
+					slog.With("err", err).ErrorContext(ctx, "failed to upload segment")
+
+					return err
+				}
+
+				slog.InfoContext(ctx, fmt.Sprintf("Uploaded segment %s", s.segment.Id))
+				nzbFile.Segments[s.segment.Number-1].Id = msgId
+
+				return nil
+			})
+		}
+
+		if err := p.Wait(); err != nil {
+			slog.With("err", err).ErrorContext(ctx, "failed to upload segments")
+
+			return err
+		}
+
+		slog.InfoContext(ctx, fmt.Sprintf("Uploaded %d segments for file %s", len(bs), nzbFile.Filename))
+
+		// Replace the original broken file in the nzb with the repaired version
+		for i, f := range nzb.Files {
+			if f.Filename == nzbFile.Filename {
+				nzb.Files[i] = *nzbFile
+				break
+			}
+		}
 	}
 
 	return nil
@@ -144,7 +326,7 @@ func downloadWorker(
 	config config.Config,
 	downloadPool nntppool.UsenetConnectionPool,
 	file nzbparser.NzbFile,
-	brokenSegmentCh chan<- nzbparser.NzbSegment,
+	brokenSegmentCh chan<- brokenSegment,
 	downloadDir string,
 ) error {
 	brokenSegmentCounter := atomic.Int64{}
@@ -179,6 +361,8 @@ func downloadWorker(
 	c, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	once := sync.Once{}
+
 	for _, s := range file.Segments {
 		select {
 		case <-c.Done():
@@ -193,18 +377,18 @@ func downloadWorker(
 						if brokenSegmentCh != nil {
 							slog.DebugContext(ctx, fmt.Sprintf("segment %s not found, sending for repair: %v", s.Id, err))
 
-							brokenSegmentCh <- s
+							brokenSegmentCh <- brokenSegment{
+								segment: &s,
+								file:    &file,
+							}
 							brokenSegmentCounter.Add(1)
 
-							//bs := brokenSegmentCounter.Load()
-
-							/* if float64(bs)/float64(len(file.Segments)) > 0.5 {
-								cancel()
-
-								slog.ErrorContext(ctx, fmt.Sprintf("too many broken segments (>50%%): %d/%d, cancelling", bs, len(file.Segments)))
-
-								return fmt.Errorf("too many broken segments (>50%%): %d/%d, cancelling", bs, len(file.Segments))
-							} */
+							// Recalculate segment size for wrong segment sizes
+							once.Do(func() {
+								for _, s := range file.Segments {
+									s.Bytes = buff.Len()
+								}
+							})
 						} else if !errors.Is(err, context.Canceled) {
 							return fmt.Errorf("segment %v not found", s.Id)
 						}
@@ -235,6 +419,5 @@ func downloadWorker(
 		return err
 	}
 
-	fmt.Println() // Add newline after progress is complete
 	return fileWriter.Close()
 }

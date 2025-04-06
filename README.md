@@ -2,6 +2,39 @@
 
 A tool to repair incomplete NZB files by reuploading the missing articles using the par2 repair.
 
+## Usage
+
+1. Create a config file `config.yaml` with your Usenet provider details:
+
+```yaml
+download_providers:
+  - host: news.example.com
+    port: 563
+    username: your_username
+    password: your_password
+    connections: 10
+    tls: true
+upload_providers:
+  - host: upload.example.com
+    port: 563
+    username: your_username
+    password: your_password
+    connections: 5
+    tls: true
+```
+
+2. Run the repair tool:
+
+```sh
+nzbrepair -c config.yaml path/to/your.nzb
+```
+
+Options:
+
+- `-c, --config`: Config file path (required)
+- `-o, --output`: Output file path for the repaired nzb (optional)
+- `-v, --verbose`: Enable verbose logging (optional)
+
 ## Development Setup
 
 To set up the project for development, follow these steps:

@@ -23,11 +23,24 @@ type Logger interface {
 type Config struct {
 	// By default the number of connections for download providers is the sum of all MaxConnections
 	DownloadWorkers   int                             `yaml:"download_workers"`
+	UploadWorkers     int                             `yaml:"upload_workers"`
 	DownloadFolder    string                          `yaml:"download_folder"`
 	DownloadProviders []nntppool.UsenetProviderConfig `yaml:"download_providers"`
 	UploadProviders   []nntppool.UsenetProviderConfig `yaml:"upload_providers"`
 	Par2Exe           string                          `yaml:"par2_exe"`
+	Upload            UploadConfig                    `yaml:"upload"`
 }
+
+type UploadConfig struct {
+	ObfuscationPolicy ObfuscationPolicy `yaml:"obfuscation_policy"`
+}
+
+type ObfuscationPolicy string
+
+const (
+	ObfuscationPolicyNone ObfuscationPolicy = "none"
+	ObfuscationPolicyFull                   = "full"
+)
 
 type Option func(*Config)
 
@@ -37,6 +50,7 @@ var (
 		MaxConnectionIdleTimeInSeconds: 2400,
 	}
 	downloadWorkersDefault = 10
+	uploadWorkersDefault   = 10
 )
 
 func mergeWithDefault(config ...Config) Config {
@@ -45,6 +59,7 @@ func mergeWithDefault(config ...Config) Config {
 			DownloadProviders: []nntppool.UsenetProviderConfig{},
 			UploadProviders:   []nntppool.UsenetProviderConfig{},
 			DownloadWorkers:   downloadWorkersDefault,
+			UploadWorkers:     uploadWorkersDefault,
 			DownloadFolder:    "./",
 		}
 	}
@@ -69,6 +84,7 @@ func mergeWithDefault(config ...Config) Config {
 		cfg.DownloadWorkers = downloadWorkers
 	}
 
+	uploadWorkers := 0
 	for i, p := range cfg.UploadProviders {
 		if p.MaxConnections == 0 {
 			p.MaxConnections = providerConfigDefault.MaxConnections
@@ -79,6 +95,11 @@ func mergeWithDefault(config ...Config) Config {
 		}
 
 		cfg.UploadProviders[i] = p
+		uploadWorkers += p.MaxConnections
+	}
+
+	if cfg.UploadWorkers == 0 {
+		cfg.UploadWorkers = uploadWorkers
 	}
 
 	return cfg

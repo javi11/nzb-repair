@@ -1,0 +1,36 @@
+name: test
+description: Run tests
+runs:
+  using: composite
+  steps:
+    # Include go and NodeJS
+    - uses: actions/setup-go@v5
+      with:
+        go-version: 1.24.0
+
+    # Include latest bun
+    - uses: oven-sh/setup-bun@v2
+
+    - name: Cache node modules
+      id: cache-npm
+      uses: actions/cache@v4
+      env:
+        cache-name: cache-node-modules
+      with:
+        # npm cache files are stored in `~/.npm` on Linux/macOS
+        path: ~/.npm
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('**/bun.lockb') }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          ${{ runner.os }}-build-
+          ${{ runner.os }}
+    - name: Go info
+      shell: bash
+      run: |
+        go version
+        go env
+      # test
+    - name: Tests
+      shell: bash
+      run: |
+        make test

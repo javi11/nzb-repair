@@ -2,7 +2,7 @@ package repairnzb
 
 import "github.com/Tensai75/nzbparser"
 
-type segment struct {
-	nzbparser.NzbSegment
-	groups []string
+type brokenSegment struct {
+	segment *nzbparser.NzbSegment
+	file    *nzbparser.NzbFile
 }

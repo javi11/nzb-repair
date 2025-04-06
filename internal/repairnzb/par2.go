@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -67,8 +66,6 @@ func par2repair(
 	var (
 		par2FileName   string
 		parameters     []string
-		cmdReader      io.ReadCloser
-		scanner        *bufio.Scanner
 		parProgressBar *progressbar.ProgressBar
 		err            error
 	)
@@ -81,6 +78,7 @@ func par2repair(
 		if !info.IsDir() && exp.MatchString(filepath.Base(info.Name())) {
 			par2FileName = info.Name()
 		}
+
 		return nil
 	}); err != nil {
 		return err
@@ -94,15 +92,31 @@ func par2repair(
 	parameters = append(parameters, filepath.Join(tmpPath, par2FileName))
 
 	cmd := exec.Command(par2Exe, parameters...)
-	slog.DebugContext(ctx, "Par command: %s", cmd.String())
+	slog.DebugContext(ctx, fmt.Sprintf("Par command: %s", cmd.String()))
 
-	// create a pipe for the output of the program
-	if cmdReader, err = cmd.StdoutPipe(); err != nil {
+	cmdErr, err := cmd.StderrPipe()
+	if err != nil {
 		return err
 	}
 
-	scanner = bufio.NewScanner(cmdReader)
+	// create a pipe for the output of the program
+	cmdReader, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(cmdReader)
 	scanner.Split(scanLines)
+
+	errScanner := bufio.NewScanner(cmdErr)
+	errScanner.Split(scanLines)
+
+	go func() {
+		for errScanner.Scan() {
+			output := strings.Trim(scanner.Text(), " \r\n")
+			slog.DebugContext(ctx, fmt.Sprintf("Error: %v", output))
+		}
+	}()
 
 	go func() {
 		// progress bar
