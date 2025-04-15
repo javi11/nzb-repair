@@ -23,17 +23,33 @@ upload_providers:
     tls: true
 ```
 
-2. Run the repair tool:
+2. Run the tool:
+
+**Single File Repair:**
 
 ```sh
 nzbrepair -c config.yaml path/to/your.nzb
 ```
 
-Options:
+**Watch Mode (Monitor a directory):**
+
+```sh
+nzbrepair watch -c config.yaml -d /path/to/watch/directory
+```
+
+**Options:**
+
+_Flags applicable to both modes:_
 
 - `-c, --config`: Config file path (required)
-- `-o, --output`: Output file path for the repaired nzb (optional)
+- `-o, --output`: Output file path or directory for repaired nzb files (optional, defaults vary by mode: next to input file for single repair, `repaired/` subdirectory for watch mode)
+- `--tmp-dir`: Temporary directory for processing files (optional, defaults to system temp dir)
 - `-v, --verbose`: Enable verbose logging (optional)
+
+_Flags specific to Watch Mode:_
+
+- `-d, --dir`: Directory to watch for nzb files (required for watch mode)
+- `-b, --db`: Path to the sqlite database file for the queue (optional, defaults to `queue.db`)
 
 ## Development Setup
 

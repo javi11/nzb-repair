@@ -39,7 +39,7 @@ type ObfuscationPolicy string
 
 const (
 	ObfuscationPolicyNone ObfuscationPolicy = "none"
-	ObfuscationPolicyFull                   = "full"
+	ObfuscationPolicyFull ObfuscationPolicy = "full"
 )
 
 type Option func(*Config)
