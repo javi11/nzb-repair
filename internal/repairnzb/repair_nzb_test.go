@@ -38,10 +38,11 @@ func TestRepairNzb(t *testing.T) {
 	mockPar2Executor := mocks.NewMockPar2Executor(ctrl) // Instantiate the mock executor
 
 	// Create a temporary directory for testing
+	inputDir := t.TempDir()
 	tmpDir := t.TempDir()
 	outputDir := t.TempDir()
 	outputFile := filepath.Join(outputDir, "output.nzb")
-	nzbFile := filepath.Join(tmpDir, "input.nzb")
+	nzbFile := filepath.Join(inputDir, "input.nzb")
 
 	// Define file/segment names for clarity
 	dataFileName := "test.mkv"
@@ -201,10 +202,11 @@ func TestRepairNzb_NoPar2Files(t *testing.T) {
 	mockUploadPool := nntppool.NewMockUsenetConnectionPool(ctrl)
 	mockPar2Executor := mocks.NewMockPar2Executor(ctrl)
 
+	inputDir := t.TempDir()
 	tmpDir := t.TempDir()
 	outputDir := t.TempDir()
 	outputFile := filepath.Join(outputDir, "output.nzb")
-	nzbFile := filepath.Join(tmpDir, "input_no_par2.nzb")
+	nzbFile := filepath.Join(inputDir, "input_no_par2.nzb")
 
 	dataFileName := "test_data.mkv"
 	segmentID := "dataSegment@test"

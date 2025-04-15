@@ -19,6 +19,9 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
+// Allow mocking exec.CommandContext in tests
+var execCommand = exec.CommandContext
+
 // Par2Executor defines the interface for executing par2 commands.
 type Par2Executor interface {
 	Repair(ctx context.Context, tmpPath string) error
@@ -112,7 +115,8 @@ func (p *Par2CmdExecutor) Repair(ctx context.Context, tmpPath string) error {
 	// The filename of the par2 file
 	parameters = append(parameters, filepath.Join(tmpPath, par2FileName))
 
-	cmd := exec.CommandContext(ctx, par2Exe, parameters...)
+	// Use the package-level variable instead of calling exec.CommandContext directly
+	cmd := execCommand(ctx, par2Exe, parameters...)
 	cmd.Dir = tmpPath // Important: Run the command in the directory containing the files
 	slog.DebugContext(ctx, fmt.Sprintf("Par command: %s in dir %s", cmd.String(), cmd.Dir))
 
