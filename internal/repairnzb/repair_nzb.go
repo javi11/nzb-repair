@@ -51,16 +51,11 @@ func RepairNzb(
 	brokenSegments := make(map[*nzbparser.NzbFile][]brokenSegment, 0)
 	brokenSegmentCh := make(chan brokenSegment, 100)
 
-	wg := &sync.WaitGroup{}
-	defer func() {
-		close(brokenSegmentCh)
-		wg.Wait()
-	}()
-
+	bswg := &sync.WaitGroup{}
 	// goroutine to listen for broken segments
-	wg.Add(1)
+	bswg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer bswg.Done()
 		for {
 			select {
 			case <-ctx.Done():
@@ -115,6 +110,9 @@ func RepairNzb(
 		}
 
 	}
+
+	close(brokenSegmentCh)
+	bswg.Wait()
 
 	if ctx.Err() != nil {
 		slog.With("err", err).ErrorContext(ctx, "repair canceled")

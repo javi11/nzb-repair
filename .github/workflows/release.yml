@@ -13,7 +13,10 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       # checkout
       - name: Checkout
@@ -21,6 +24,8 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/test
+        with:
+          os: ${{ matrix.os }}
   build-artifacts:
     runs-on: macos-13
     needs: test
