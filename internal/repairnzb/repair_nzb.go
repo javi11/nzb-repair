@@ -39,8 +39,12 @@ func RepairNzb(
 
 	nzb, err := nzbparser.Parse(content)
 	if err != nil {
+		_ = content.Close()
+
 		return err
 	}
+
+	_ = content.Close()
 
 	parFiles, restFiles := splitParWithRest(nzb)
 	if len(parFiles) == 0 {
@@ -224,16 +228,17 @@ func replaceBrokenSegments(
 			return nil
 		}
 
-		f, err := os.Open(filepath.Join(tmpFolder, nzbFile.Filename))
+		tmpFile, err := os.Open(filepath.Join(tmpFolder, nzbFile.Filename))
 		if err != nil {
 			slog.With("err", err).ErrorContext(ctx, "failed to open file")
 
 			return err
 		}
 
-		fs, err := f.Stat()
+		fs, err := tmpFile.Stat()
 		if err != nil {
 			slog.With("err", err).ErrorContext(ctx, "failed to get file info")
+			_ = tmpFile.Close()
 
 			return err
 		}
@@ -254,7 +259,7 @@ func replaceBrokenSegments(
 
 				// Get the segment from the file
 				buff := make([]byte, s.segment.Bytes)
-				_, err := f.ReadAt(buff, int64((s.segment.Number-1)*s.segment.Bytes))
+				_, err := tmpFile.ReadAt(buff, int64((s.segment.Number-1)*s.segment.Bytes))
 				if err != nil {
 					slog.With("err", err).ErrorContext(ctx, "failed to read segment")
 
@@ -319,10 +324,12 @@ func replaceBrokenSegments(
 
 		if err := p.Wait(); err != nil {
 			slog.With("err", err).ErrorContext(ctx, "failed to upload segments")
+			_ = tmpFile.Close()
 
 			return err
 		}
 
+		_ = tmpFile.Close()
 		slog.InfoContext(ctx, fmt.Sprintf("Uploaded %d segments for file %s", len(bs), nzbFile.Filename))
 
 		// Replace the original broken file in the nzb with the repaired version
@@ -367,6 +374,10 @@ func downloadWorker(
 
 		return fmt.Errorf("failed to create file: %w", err)
 	}
+
+	defer func() {
+		_ = fileWriter.Close()
+	}()
 
 	bar := progressbar.NewOptions(int(file.Bytes),
 		progressbar.OptionSetWriter(ansi.NewAnsiStdout()), //you should install "github.com/k0kubun/go-ansi"
@@ -450,5 +461,5 @@ func downloadWorker(
 		return err
 	}
 
-	return fileWriter.Close()
+	return nil
 }
