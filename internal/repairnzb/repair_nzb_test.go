@@ -95,7 +95,7 @@ func TestRepairNzb(t *testing.T) {
 				// Simulate writing segment 2 content to the correct offset in the temp file
 				// Note: This write happens *before* par2 repair in the actual code flow.
 				// We assume downloadWorker creates the file.
-				filePath := filepath.Join(outputDir, dataFileName)
+				filePath := filepath.Join(tmpDir, dataFileName)
 				file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0644)
 				require.NoError(t, err) // Test fails if we can't open file
 				defer func() {
@@ -109,6 +109,7 @@ func TestRepairNzb(t *testing.T) {
 				_, err = writer.Write([]byte(originalDataFileContentSegment2))
 				require.NoError(t, err)
 			}
+
 			return int64(len(originalDataFileContentSegment2)), nil
 		}).Times(1)
 	// Par2 Segment - Found & Written
@@ -124,6 +125,7 @@ func TestRepairNzb(t *testing.T) {
 				_, err = writer.Write(parContent)
 				require.NoError(t, err)
 			}
+
 			return int64(len(parContent)), nil
 		}).Times(1)
 
@@ -135,7 +137,8 @@ func TestRepairNzb(t *testing.T) {
 			// Write the complete, "repaired" content.
 			err := os.WriteFile(fullFilePath, []byte(repairedDataContent), 0644)
 			require.NoError(t, err) // Ensure simulation is successful
-			return nil              // Simulate successful repair
+
+			return nil // Simulate successful repair
 		}).Times(1)
 
 	// Upload Expectation:

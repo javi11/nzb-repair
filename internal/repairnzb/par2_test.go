@@ -42,8 +42,9 @@ func TestPar2CmdExecutor_Repair(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
-		_, err := os.Create(par2File)
+		f, err := os.Create(par2File)
 		require.NoError(t, err)
+		_ = f.Close()
 
 		// Set env vars for the mock command
 		os.Setenv("TEST_PAR2_EXIT_CODE", "0")
@@ -76,8 +77,9 @@ Repair complete.
 	t.Run("Repair Possible Exit Code 1", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
-		_, err := os.Create(par2File)
+		f, err := os.Create(par2File)
 		require.NoError(t, err)
+		_ = f.Close()
 
 		os.Setenv("TEST_PAR2_EXIT_CODE", "1")
 		os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
@@ -101,8 +103,9 @@ Repair possible.
 	t.Run("Repair Not Possible Exit Code 2", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
-		_, err := os.Create(par2File)
+		f, err := os.Create(par2File)
 		require.NoError(t, err)
+		_ = f.Close()
 
 		os.Setenv("TEST_PAR2_EXIT_CODE", "2")
 		os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
@@ -124,8 +127,9 @@ Need 10 recovery blocks, only 5 available.`)
 	t.Run("Unknown Exit Code", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
-		_, err := os.Create(par2File)
+		f, err := os.Create(par2File)
 		require.NoError(t, err)
+		_ = f.Close()
 
 		os.Setenv("TEST_PAR2_EXIT_CODE", "99")
 		os.Setenv("TEST_PAR2_STDOUT", "")
@@ -146,8 +150,9 @@ Need 10 recovery blocks, only 5 available.`)
 	t.Run("Command Not Found", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
-		_, err := os.Create(par2File)
+		f, err := os.Create(par2File)
 		require.NoError(t, err)
+		_ = f.Close()
 
 		// Using a high, unmapped exit code might simulate an execution environment issue
 		os.Setenv("TEST_PAR2_EXIT_CODE", "127") // Often used for command not found by shells
@@ -169,8 +174,9 @@ Need 10 recovery blocks, only 5 available.`)
 	t.Run("Progress Bar Handling", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
-		_, err := os.Create(par2File)
+		f, err := os.Create(par2File)
 		require.NoError(t, err)
+		_ = f.Close()
 
 		// Simulate stdout with progress percentage
 		os.Setenv("TEST_PAR2_EXIT_CODE", "0")
@@ -200,8 +206,9 @@ Done.`)
 	t.Run("Empty ExePath uses default", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
-		_, err := os.Create(par2File)
+		f, err := os.Create(par2File)
 		require.NoError(t, err)
+		_ = f.Close()
 
 		os.Setenv("TEST_PAR2_EXIT_CODE", "0")
 		os.Setenv("TEST_PAR2_STDOUT", "Success")
