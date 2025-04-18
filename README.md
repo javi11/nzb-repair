@@ -1,5 +1,7 @@
 # nzb-repair
 
+<a href="https://www.buymeacoffee.com/qbt52hh7sjd"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=qbt52hh7sjd&button_colour=FFDD00&font_colour=000000&font_family=Comic&outline_colour=000000&coffee_colour=ffffff" /></a>
+
 A tool to repair incomplete NZB files by reuploading the missing articles using the par2 repair.
 
 ## Usage
@@ -28,13 +30,13 @@ upload_providers:
 **Single File Repair:**
 
 ```sh
-nzbrepair -c config.yaml path/to/your.nzb
+nzb-repair -c config.yaml path/to/your.nzb
 ```
 
 **Watch Mode (Monitor a directory):**
 
 ```sh
-nzbrepair watch -c config.yaml -d /path/to/watch/directory
+nzb-repair watch -c config.yaml -d /path/to/watch/directory
 ```
 
 **Options:**
