@@ -35,6 +35,8 @@ nzb-repair -c config.yaml path/to/your.nzb
 
 **Watch Mode (Monitor a directory):**
 
+It will scan a directory in configurable interval for files to repair.
+
 ```sh
 nzb-repair watch -c config.yaml -d /path/to/watch/directory
 ```

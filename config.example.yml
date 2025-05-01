@@ -15,3 +15,11 @@ upload_providers:
     ssl: true
     max_connections: 5
     max_connection_idle_time_in_seconds: 2400
+# Scan interval for the directory watcher in duration string like "40s" "5m", "1h"
+scan_interval: 5m
+
+# Maximum number of retries for a failed download
+max_retries: 3
+
+# Folder to move broken files to
+broken_folder: broken

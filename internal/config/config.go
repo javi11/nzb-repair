@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/javi11/nntppool"
 	"gopkg.in/yaml.v3"
@@ -29,6 +30,9 @@ type Config struct {
 	UploadProviders   []nntppool.UsenetProviderConfig `yaml:"upload_providers"`
 	Par2Exe           string                          `yaml:"par2_exe"`
 	Upload            UploadConfig                    `yaml:"upload"`
+	ScanInterval      time.Duration                   `yaml:"scan_interval"` // duration string like "5m", "1h"
+	MaxRetries        int64                           `yaml:"max_retries"`   // maximum number of retries before moving to broken folder
+	BrokenFolder      string                          `yaml:"broken_folder"` // folder to move broken files to
 }
 
 type UploadConfig struct {
@@ -51,6 +55,9 @@ var (
 	}
 	downloadWorkersDefault = 10
 	uploadWorkersDefault   = 10
+	scanIntervalDefault    = 5 * time.Minute
+	maxRetriesDefault      = int64(3)
+	brokenFolderDefault    = "broken"
 )
 
 func mergeWithDefault(config ...Config) Config {
@@ -61,6 +68,9 @@ func mergeWithDefault(config ...Config) Config {
 			DownloadWorkers:   downloadWorkersDefault,
 			UploadWorkers:     uploadWorkersDefault,
 			DownloadFolder:    "./",
+			ScanInterval:      scanIntervalDefault,
+			MaxRetries:        maxRetriesDefault,
+			BrokenFolder:      brokenFolderDefault,
 		}
 	}
 
@@ -100,6 +110,18 @@ func mergeWithDefault(config ...Config) Config {
 
 	if cfg.UploadWorkers == 0 {
 		cfg.UploadWorkers = uploadWorkers
+	}
+
+	if cfg.ScanInterval == 0 {
+		cfg.ScanInterval = scanIntervalDefault
+	}
+
+	if cfg.MaxRetries == 0 {
+		cfg.MaxRetries = maxRetriesDefault
+	}
+
+	if cfg.BrokenFolder == "" {
+		cfg.BrokenFolder = brokenFolderDefault
 	}
 
 	return cfg

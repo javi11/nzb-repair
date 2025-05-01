@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Tensai75/nzbparser"
@@ -138,17 +139,27 @@ func (p *Par2CmdExecutor) Repair(ctx context.Context, tmpPath string) error {
 	errScanner.Split(scanLines)
 
 	var stderrOutput strings.Builder
+
+	mu := sync.Mutex{}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for errScanner.Scan() {
 			line := strings.TrimSpace(errScanner.Text())
 			if line != "" {
 				slog.DebugContext(ctx, "PAR2 STDERR:", "line", line)
+				mu.Lock()
 				stderrOutput.WriteString(line + "\n")
+				mu.Unlock()
 			}
 		}
 	}()
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		// Ensure parProgressBar is initialized before use
 		parProgressBar = progressbar.NewOptions(100, // Use 100 as max for percentage
 			progressbar.OptionSetDescription("INFO:    Repairing files    "),
@@ -186,6 +197,10 @@ func (p *Par2CmdExecutor) Repair(ctx context.Context, tmpPath string) error {
 	}()
 
 	if err = cmd.Run(); err != nil {
+		mu.Lock()
+		output := stderrOutput.String()
+		mu.Unlock()
+
 		if exitError, ok := err.(*exec.ExitError); ok {
 			if parProgressBar != nil {
 				_ = parProgressBar.Close() // Attempt to close/clear on error too
@@ -193,24 +208,26 @@ func (p *Par2CmdExecutor) Repair(ctx context.Context, tmpPath string) error {
 
 			if errMsg, ok := par2ExitCodes[exitError.ExitCode()]; ok {
 				// Specific known error codes from par2
-				fullErrMsg := fmt.Sprintf("par2 exited with code %d: %s. Stderr: %s", exitError.ExitCode(), errMsg, stderrOutput.String())
+				fullErrMsg := fmt.Sprintf("par2 exited with code %d: %s. Stderr: %s", exitError.ExitCode(), errMsg, output)
 				slog.ErrorContext(ctx, fullErrMsg)
 				// Treat specific codes as potentially non-fatal or requiring different handling
 				// For now, return all as errors, but could customize (e.g., ignore exit code 1 if repair was possible)
 				return errors.New(fullErrMsg)
 			}
 			// Unknown exit code
-			unknownErrMsg := fmt.Sprintf("par2 exited with unknown code %d. Stderr: %s", exitError.ExitCode(), stderrOutput.String())
+			unknownErrMsg := fmt.Sprintf("par2 exited with unknown code %d. Stderr: %s", exitError.ExitCode(), output)
 			slog.ErrorContext(ctx, unknownErrMsg)
 			return errors.New(unknownErrMsg)
 		}
 		// Error not related to exit code (e.g., command not found)
-		return fmt.Errorf("failed to run par2 command '%s': %w. Stderr: %s", cmd.String(), err, stderrOutput.String())
+		return fmt.Errorf("failed to run par2 command '%s': %w. Stderr: %s", cmd.String(), err, output)
 	}
 
 	if parProgressBar != nil {
 		_ = parProgressBar.Finish() // Ensure finish is called on success
 	}
+
+	wg.Wait()
 
 	slog.InfoContext(ctx, "Par2 repair completed successfully")
 

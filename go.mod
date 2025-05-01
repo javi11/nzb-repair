@@ -11,11 +11,11 @@ tool (
 
 require (
 	github.com/Tensai75/nzbparser v0.1.0
-	github.com/helshabini/fsbroker v0.1.7
 	github.com/javi11/nntppool v0.2.1
 	github.com/k0kubun/go-ansi v0.0.0-20180517002512-3bf9e2903213
 	github.com/mattn/go-sqlite3 v1.14.27
 	github.com/mnightingale/rapidyenc v0.0.0-20240809192858-2494683cdd67
+	github.com/opencontainers/selinux v1.12.0
 	github.com/schollz/progressbar/v3 v3.18.0
 	github.com/sourcegraph/conc v0.3.0
 	github.com/spf13/cobra v1.9.1

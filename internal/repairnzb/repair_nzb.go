@@ -380,7 +380,7 @@ func downloadWorker(
 	}()
 
 	bar := progressbar.NewOptions(int(file.Bytes),
-		progressbar.OptionSetWriter(ansi.NewAnsiStdout()), //you should install "github.com/k0kubun/go-ansi"
+		progressbar.OptionSetWriter(ansi.NewAnsiStdout()),
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionSetWidth(15),
 		progressbar.OptionShowBytes(true),

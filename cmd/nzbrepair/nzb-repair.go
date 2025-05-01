@@ -41,8 +41,8 @@ var (
 	}
 	watchCmd = &cobra.Command{
 		Use:   "watch",
-		Short: "Watch a directory for new NZB files and repair them",
-		Long:  `Monitors a specified directory. When a new .nzb file is added, it queues it for repair.`,
+		Short: "Scan a directory for NZB files and repair them",
+		Long:  `Periodically scans a specified directory for .nzb files and queues them for repair. The scan interval can be configured in the config file.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.NewFromFile(configFile)
 			if err != nil {

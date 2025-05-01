@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3" // Import the sqlite3 driver
@@ -18,6 +21,7 @@ const (
 	StatusProcessing JobStatus = "processing"
 	StatusCompleted  JobStatus = "completed"
 	StatusFailed     JobStatus = "failed"
+	StatusMoved      JobStatus = "moved"
 )
 
 // ErrDuplicateJob can be used by mock implementations.
@@ -31,6 +35,7 @@ type Job struct {
 	RelativePath string
 	Status       JobStatus
 	ErrorMsg     sql.NullString
+	RetryCount   int64
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -48,6 +53,7 @@ var _ Queuer = (*Queue)(nil)
 
 type Queue struct {
 	db *sql.DB
+	mu sync.Mutex
 }
 
 // NewQueue initializes the SQLite database and creates/updates the jobs table.
@@ -65,6 +71,7 @@ func NewQueue(dbPath string) (*Queue, error) {
 		relative_path TEXT NOT NULL DEFAULT '',
 		status TEXT NOT NULL DEFAULT 'pending',
 		error_msg TEXT,
+		retry_count INTEGER NOT NULL DEFAULT 0,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
@@ -76,9 +83,20 @@ func NewQueue(dbPath string) (*Queue, error) {
 		return nil, fmt.Errorf("failed to create jobs table: %w", err)
 	}
 
+	// Attempt to add the retry_count column if it doesn't exist (migration for older dbs)
+	alterQuery := `ALTER TABLE jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0`
+	_, err = db.Exec(alterQuery)
+	if err != nil {
+		// Ignore error if the column already exists
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			// Log other alteration errors but don't fail initialization
+			slog.Warn("failed to add retry_count column (might already exist)", "error", err)
+		}
+	}
+
 	// Attempt to add the relative_path column if it doesn't exist (migration for older dbs)
 	// This avoids errors if the table already exists without the column.
-	alterQuery := `ALTER TABLE jobs ADD COLUMN relative_path TEXT NOT NULL DEFAULT ''`
+	alterQuery = `ALTER TABLE jobs ADD COLUMN relative_path TEXT NOT NULL DEFAULT ''`
 	_, err = db.Exec(alterQuery)
 	if err != nil {
 		// Ignore error if the column already exists
@@ -102,13 +120,16 @@ func NewQueue(dbPath string) (*Queue, error) {
 		}
 	}
 
-	return &Queue{db: db}, nil
+	return &Queue{db: db, mu: sync.Mutex{}}, nil
 }
 
 // AddJob adds a new NZB file path (absolute and relative) to the queue with pending status.
 // It ignores duplicates based on the absolute filepath unless the existing job is failed,
 // in which case it resets the status to pending and updates the relative path.
 func (q *Queue) AddJob(filePath string, relativePath string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	tx, err := q.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
@@ -164,6 +185,9 @@ func (q *Queue) AddJob(filePath string, relativePath string) error {
 // GetNextJob retrieves the oldest pending job, marks it as processing, and returns it.
 // Returns sql.ErrNoRows if no pending jobs are available.
 func (q *Queue) GetNextJob() (*Job, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	tx, err := q.db.Begin()
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
@@ -205,14 +229,29 @@ func (q *Queue) GetNextJob() (*Job, error) {
 }
 
 // UpdateJobStatus updates the status and optionally the error message for a given job ID.
+// If the status is being set to failed, it will increment the retry count.
 func (q *Queue) UpdateJobStatus(jobID int64, status JobStatus, errorMsg string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	var errMsg sql.NullString
 	if errorMsg != "" {
 		errMsg = sql.NullString{String: errorMsg, Valid: true}
 	}
 
-	query := `UPDATE jobs SET status = ?, error_msg = ?, updated_at = ? WHERE id = ?`
-	_, err := q.db.Exec(query, status, errMsg, time.Now(), jobID)
+	var query string
+	var args []interface{}
+
+	if status == StatusFailed {
+		// Increment retry count when status is set to failed
+		query = `UPDATE jobs SET status = ?, error_msg = ?, updated_at = ?, retry_count = retry_count + 1 WHERE id = ?`
+		args = []interface{}{status, errMsg, time.Now(), jobID}
+	} else {
+		query = `UPDATE jobs SET status = ?, error_msg = ?, updated_at = ? WHERE id = ?`
+		args = []interface{}{status, errMsg, time.Now(), jobID}
+	}
+
+	_, err := q.db.Exec(query, args...)
 	if err != nil {
 		return fmt.Errorf("failed to update job status: %w", err)
 	}
@@ -249,4 +288,78 @@ func (q *Queue) CleanupProcessingJobs() (int64, error) {
 	}
 
 	return rowsAffected, nil
+}
+
+// MoveFailedFiles moves files that have exceeded the maximum number of retries
+// to the broken folder. Returns the number of files moved and any error encountered.
+func (q *Queue) MoveFailedFiles(maxRetries int64, brokenFolder string) (int64, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	// Create broken folder if it doesn't exist
+	if err := os.MkdirAll(brokenFolder, 0755); err != nil {
+		return 0, fmt.Errorf("failed to create broken folder: %w", err)
+	}
+
+	// Get all failed jobs that have exceeded max retries
+	query := `
+		SELECT id, filepath, relative_path 
+		FROM jobs 
+		WHERE status = ? AND retry_count >= ?
+	`
+	rows, err := q.db.Query(query, StatusFailed, maxRetries)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query failed jobs: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var movedCount int64
+	for rows.Next() {
+		var job Job
+		if err := rows.Scan(&job.ID, &job.FilePath, &job.RelativePath); err != nil {
+			return movedCount, fmt.Errorf("failed to scan job row: %w", err)
+		}
+
+		// Get the filename from the path
+		_, filename := filepath.Split(job.FilePath)
+		if filename == "" {
+			slog.Warn("Skipping file with empty filename", "filepath", job.FilePath)
+			continue
+		}
+
+		// Create destination path in broken folder
+		destPath := filepath.Join(brokenFolder, filename)
+
+		// Move the file
+		if err := os.Rename(job.FilePath, destPath); err != nil {
+			slog.Error("Failed to move file to broken folder",
+				"filepath", job.FilePath,
+				"dest", destPath,
+				"error", err)
+			continue
+		}
+
+		// Update job status to indicate it was moved
+		updateQuery := `UPDATE jobs SET status = 'moved', updated_at = datetime('now') WHERE id = ?`
+		if _, err := q.db.Exec(updateQuery, job.ID); err != nil {
+			slog.Error("Failed to update job status after move",
+				"job_id", job.ID,
+				"error", err)
+			continue
+		}
+
+		movedCount++
+		slog.Info("Moved failed file to broken folder",
+			"filepath", job.FilePath,
+			"dest", destPath,
+			"retry_count", job.RetryCount)
+	}
+
+	if err := rows.Err(); err != nil {
+		return movedCount, fmt.Errorf("error iterating failed jobs: %w", err)
+	}
+
+	return movedCount, nil
 }

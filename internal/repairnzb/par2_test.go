@@ -30,6 +30,10 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+type contextKey string
+
+const loggerKey contextKey = "logger"
+
 func TestPar2CmdExecutor_Repair(t *testing.T) {
 	// Backup and restore execCommand
 	originalExecCommand := execCommand
@@ -47,15 +51,15 @@ func TestPar2CmdExecutor_Repair(t *testing.T) {
 		_ = f.Close()
 
 		// Set env vars for the mock command
-		os.Setenv("TEST_PAR2_EXIT_CODE", "0")
-		os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "0")
+		_ = os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
 Repair complete.
 100%`)
-		os.Setenv("TEST_PAR2_STDERR", "")
+		_ = os.Setenv("TEST_PAR2_STDERR", "")
 		defer func() {
-			os.Unsetenv("TEST_PAR2_EXIT_CODE")
-			os.Unsetenv("TEST_PAR2_STDOUT")
-			os.Unsetenv("TEST_PAR2_STDERR")
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
 		}()
 
 		executor := &Par2CmdExecutor{ExePath: "par2"} // ExePath is used by mock indirectly
@@ -81,16 +85,16 @@ Repair complete.
 		require.NoError(t, err)
 		_ = f.Close()
 
-		os.Setenv("TEST_PAR2_EXIT_CODE", "1")
-		os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "1")
+		_ = os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
 Need to repair 5 blocks.
 Repair possible.
 100%`)
-		os.Setenv("TEST_PAR2_STDERR", "Some warnings maybe")
+		_ = os.Setenv("TEST_PAR2_STDERR", "Some warnings maybe")
 		defer func() {
-			os.Unsetenv("TEST_PAR2_EXIT_CODE")
-			os.Unsetenv("TEST_PAR2_STDOUT")
-			os.Unsetenv("TEST_PAR2_STDERR")
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
 		}()
 
 		executor := &Par2CmdExecutor{ExePath: "par2"}
@@ -107,14 +111,14 @@ Repair possible.
 		require.NoError(t, err)
 		_ = f.Close()
 
-		os.Setenv("TEST_PAR2_EXIT_CODE", "2")
-		os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "2")
+		_ = os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
 Need 10 recovery blocks, only 5 available.`)
-		os.Setenv("TEST_PAR2_STDERR", "Not enough data")
+		_ = os.Setenv("TEST_PAR2_STDERR", "Not enough data")
 		defer func() {
-			os.Unsetenv("TEST_PAR2_EXIT_CODE")
-			os.Unsetenv("TEST_PAR2_STDOUT")
-			os.Unsetenv("TEST_PAR2_STDERR")
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
 		}()
 
 		executor := &Par2CmdExecutor{ExePath: "par2"}
@@ -131,13 +135,13 @@ Need 10 recovery blocks, only 5 available.`)
 		require.NoError(t, err)
 		_ = f.Close()
 
-		os.Setenv("TEST_PAR2_EXIT_CODE", "99")
-		os.Setenv("TEST_PAR2_STDOUT", "")
-		os.Setenv("TEST_PAR2_STDERR", "Something weird happened")
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "99")
+		_ = os.Setenv("TEST_PAR2_STDOUT", "")
+		_ = os.Setenv("TEST_PAR2_STDERR", "Something weird happened")
 		defer func() {
-			os.Unsetenv("TEST_PAR2_EXIT_CODE")
-			os.Unsetenv("TEST_PAR2_STDOUT")
-			os.Unsetenv("TEST_PAR2_STDERR")
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
 		}()
 
 		executor := &Par2CmdExecutor{ExePath: "par2"}
@@ -155,13 +159,13 @@ Need 10 recovery blocks, only 5 available.`)
 		_ = f.Close()
 
 		// Using a high, unmapped exit code might simulate an execution environment issue
-		os.Setenv("TEST_PAR2_EXIT_CODE", "127") // Often used for command not found by shells
-		os.Setenv("TEST_PAR2_STDOUT", "")
-		os.Setenv("TEST_PAR2_STDERR", "par2: command not found") // Simulate typical stderr
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "127") // Often used for command not found by shells
+		_ = os.Setenv("TEST_PAR2_STDOUT", "")
+		_ = os.Setenv("TEST_PAR2_STDERR", "par2: command not found") // Simulate typical stderr
 		defer func() {
-			os.Unsetenv("TEST_PAR2_EXIT_CODE")
-			os.Unsetenv("TEST_PAR2_STDOUT")
-			os.Unsetenv("TEST_PAR2_STDERR")
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
 		}()
 
 		executor := &Par2CmdExecutor{ExePath: "/non/existent/par2"} // Use a clearly invalid path
@@ -179,17 +183,17 @@ Need 10 recovery blocks, only 5 available.`)
 		_ = f.Close()
 
 		// Simulate stdout with progress percentage
-		os.Setenv("TEST_PAR2_EXIT_CODE", "0")
-		os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "0")
+		_ = os.Setenv("TEST_PAR2_STDOUT", `Verifying files...
 50% complete
 Repairing...
 100.00%
 Done.`)
-		os.Setenv("TEST_PAR2_STDERR", "")
+		_ = os.Setenv("TEST_PAR2_STDERR", "")
 		defer func() {
-			os.Unsetenv("TEST_PAR2_EXIT_CODE")
-			os.Unsetenv("TEST_PAR2_STDOUT")
-			os.Unsetenv("TEST_PAR2_STDERR")
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
 		}()
 
 		executor := &Par2CmdExecutor{ExePath: "par2"}
@@ -197,7 +201,7 @@ Done.`)
 		// Capture log output to check progress bar messages indirectly
 		var logBuf bytes.Buffer
 		handler := slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})
-		ctx = context.WithValue(ctx, "key", slog.New(handler))
+		ctx = context.WithValue(ctx, loggerKey, slog.New(handler))
 
 		err = executor.Repair(ctx, tmpDir)
 		assert.NoError(t, err)
@@ -210,13 +214,13 @@ Done.`)
 		require.NoError(t, err)
 		_ = f.Close()
 
-		os.Setenv("TEST_PAR2_EXIT_CODE", "0")
-		os.Setenv("TEST_PAR2_STDOUT", "Success")
-		os.Setenv("TEST_PAR2_STDERR", "")
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "0")
+		_ = os.Setenv("TEST_PAR2_STDOUT", "Success")
+		_ = os.Setenv("TEST_PAR2_STDERR", "")
 		defer func() {
-			os.Unsetenv("TEST_PAR2_EXIT_CODE")
-			os.Unsetenv("TEST_PAR2_STDOUT")
-			os.Unsetenv("TEST_PAR2_STDERR")
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
 		}()
 
 		// Mock execCommand checks the command name passed to it
@@ -273,8 +277,8 @@ func testHelperProcess(t *testing.T) {
 		}
 	}
 
-	fmt.Fprint(os.Stdout, stdout)
-	fmt.Fprint(os.Stderr, stderr)
+	_, _ = fmt.Fprint(os.Stdout, stdout)
+	_, _ = fmt.Fprint(os.Stderr, stderr)
 	os.Exit(exitCode)
 }
 

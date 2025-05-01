@@ -15,7 +15,7 @@ import (
 	"github.com/javi11/nzb-repair/internal/config"
 	"github.com/javi11/nzb-repair/internal/queue"
 	"github.com/javi11/nzb-repair/internal/repairnzb"
-	"github.com/javi11/nzb-repair/internal/watcher"
+	"github.com/javi11/nzb-repair/internal/scanner"
 	"github.com/javi11/nzb-repair/pkg/par2exedownloader"
 	"golang.org/x/sync/errgroup"
 )
@@ -81,7 +81,7 @@ func RunSingleRepair(ctx context.Context, cfg config.Config, nzbFile string, out
 	return nil
 }
 
-// RunWatcher starts the directory watcher and the repair worker goroutines.
+// RunWatcher starts the directory scanner and the repair worker goroutines.
 func RunWatcher(ctx context.Context, cfg config.Config, watchDir string, dbPath string, outputBaseDirFlag string, tmpDir string, verbose bool) error {
 	logger := setupLogging(verbose)
 
@@ -152,18 +152,18 @@ func RunWatcher(ctx context.Context, cfg config.Config, watchDir string, dbPath 
 		// uploadPool.Quit()
 	}()
 
-	fileWatcher := watcher.NewWatcher(watchDir, dbQueue, logger)
+	fileScanner := scanner.New(watchDir, dbQueue, logger, cfg.ScanInterval)
 	eg, gCtx := errgroup.WithContext(ctx)
 
-	// Goroutine for the directory watcher
+	// Goroutine for the directory scanner
 	eg.Go(func() error {
-		logger.InfoContext(gCtx, "Starting directory watcher...", "directory", watchDir)
-		err := fileWatcher.Run(gCtx)
+		logger.InfoContext(gCtx, "Starting directory scanner...", "directory", watchDir, "interval", cfg.ScanInterval)
+		err := fileScanner.Run(gCtx)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			logger.ErrorContext(gCtx, "Directory watcher failed", "error", err)
-			return fmt.Errorf("directory watcher error: %w", err) // Return error to errgroup
+			logger.ErrorContext(gCtx, "Directory scanner failed", "error", err)
+			return fmt.Errorf("directory scanner error: %w", err) // Return error to errgroup
 		}
-		logger.InfoContext(gCtx, "Directory watcher stopped")
+		logger.InfoContext(gCtx, "Directory scanner stopped")
 		return nil
 	})
 
@@ -177,7 +177,6 @@ func RunWatcher(ctx context.Context, cfg config.Config, watchDir string, dbPath 
 			select {
 			case <-gCtx.Done():
 				logger.InfoContext(gCtx, "Repair worker stopping due to context cancellation.")
-
 				return gCtx.Err()
 			case <-workerTicker.C:
 				job, err := dbQueue.GetNextJob()
@@ -188,7 +187,6 @@ func RunWatcher(ctx context.Context, cfg config.Config, watchDir string, dbPath 
 
 					logger.ErrorContext(gCtx, "Failed to get next job from queue", "error", err)
 					time.Sleep(defaultWorkerInterval) // Add a small delay before retrying
-
 					continue
 				}
 
@@ -198,49 +196,65 @@ func RunWatcher(ctx context.Context, cfg config.Config, watchDir string, dbPath 
 				outputFilePath, pathErr := calculateJobOutputPath(outputBaseDir, job, logger, gCtx, dbQueue)
 				if pathErr != nil {
 					// Error already logged and status updated in calculateJobOutputPath
-					continue // Skip this job
+					continue
 				}
 
-				// Run the actual repair process
-				repairStartTime := time.Now()
-				logger.InfoContext(gCtx, "Starting repair for job", "job_id", job.ID, "input", job.FilePath, "output", outputFilePath)
-
-				tmpDir := filepath.Join(absTmpDir, filepath.Base(job.FilePath))
-				repairErr := repairnzb.RepairNzb(
+				// Process the job
+				err = repairnzb.RepairNzb(
 					gCtx,
 					cfg,
 					downloadPool,
 					uploadPool,
-					par2Executor,   // Pass the same executor instance
-					job.FilePath,   // Absolute path from the watcher/queue
-					outputFilePath, // Calculated absolute output path
-					tmpDir,         // Shared absolute temp dir path
+					par2Executor,
+					job.FilePath,
+					outputFilePath,
+					absTmpDir,
 				)
-				repairDuration := time.Since(repairStartTime)
 
-				// Update job status based on repair outcome
-				if repairErr != nil {
-					errMsg := repairErr.Error()
-					logger.ErrorContext(gCtx, "Failed to repair NZB", "job_id", job.ID, "filepath", job.FilePath, "duration", repairDuration, "error", repairErr)
-					if uerr := dbQueue.UpdateJobStatus(job.ID, queue.StatusFailed, errMsg); uerr != nil {
-						// Log the update error, but the primary error is the repair failure
-						logger.ErrorContext(gCtx, "Failed to update job status to failed", "job_id", job.ID, "update_error", uerr)
+				if err != nil {
+					logger.ErrorContext(gCtx, "Repair failed", "job_id", job.ID, "filepath", job.FilePath, "error", err)
+					if updateErr := dbQueue.UpdateJobStatus(job.ID, queue.StatusFailed, err.Error()); updateErr != nil {
+						logger.ErrorContext(gCtx, "Failed to update job status to failed", "job_id", job.ID, "error", updateErr)
 					}
-				} else {
-					logger.InfoContext(gCtx, "Successfully repaired NZB", "job_id", job.ID, "input_filepath", job.FilePath, "output_filepath", outputFilePath, "duration", repairDuration)
-					if uerr := dbQueue.UpdateJobStatus(job.ID, queue.StatusCompleted, ""); uerr != nil {
-						logger.ErrorContext(gCtx, "Failed to update job status to completed", "job_id", job.ID, "update_error", uerr)
-					}
+					continue
+				}
+
+				logger.InfoContext(gCtx, "Repair successful", "job_id", job.ID, "filepath", job.FilePath, "output", outputFilePath)
+				if updateErr := dbQueue.UpdateJobStatus(job.ID, queue.StatusCompleted, ""); updateErr != nil {
+					logger.ErrorContext(gCtx, "Failed to update job status to completed", "job_id", job.ID, "error", updateErr)
+				}
+			}
+		}
+	})
+
+	// Goroutine for moving failed files
+	eg.Go(func() error {
+		logger.InfoContext(gCtx, "Starting failed files mover...", "max_retries", cfg.MaxRetries, "broken_folder", cfg.BrokenFolder)
+		moverTicker := time.NewTicker(cfg.ScanInterval)
+		defer moverTicker.Stop()
+
+		for {
+			select {
+			case <-gCtx.Done():
+				logger.InfoContext(gCtx, "Failed files mover stopping due to context cancellation.")
+				return gCtx.Err()
+			case <-moverTicker.C:
+				movedCount, err := dbQueue.MoveFailedFiles(cfg.MaxRetries, cfg.BrokenFolder)
+				if err != nil {
+					logger.ErrorContext(gCtx, "Failed to move failed files", "error", err)
+					continue
+				}
+				if movedCount > 0 {
+					logger.InfoContext(gCtx, "Moved failed files to broken folder", "count", movedCount)
 				}
 			}
 		}
 	})
 
 	logger.InfoContext(ctx, "Watcher and worker started. Waiting for jobs or termination signal (Ctrl+C)...")
-	// Wait for either goroutine to exit (or context cancellation)
-	if err := eg.Wait(); err != nil && !errors.Is(err, context.Canceled) {
-		logger.ErrorContext(ctx, "Application exited with error", "error", err)
-		return err // Return the actual error from the errgroup
+	// Wait for all goroutines to complete
+	if err := eg.Wait(); err != nil {
+		return fmt.Errorf("watcher error: %w", err)
 	}
 
 	logger.InfoContext(ctx, "Application shut down gracefully.")
