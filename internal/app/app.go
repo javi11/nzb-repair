@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/javi11/nntppool"
+	nntppool "github.com/javi11/nntppool/v4"
 	"github.com/javi11/nzb-repair/internal/config"
 	"github.com/javi11/nzb-repair/internal/queue"
 	"github.com/javi11/nzb-repair/internal/repairnzb"
@@ -43,17 +44,16 @@ func RunSingleRepair(ctx context.Context, cfg config.Config, nzbFile string, out
 	// Create the par2 executor
 	par2Executor := &repairnzb.Par2CmdExecutor{ExePath: par2ExePath}
 
-	uploadPool, downloadPool, err := createPools(cfg)
+	uploadPool, downloadPool, err := createPools(ctx, cfg)
 	if err != nil {
 		return err // Error already contains context
 	}
 	// Ensure pools are closed properly
 	defer func() {
 		logger.DebugContext(ctx, "Closing download pool")
-		downloadPool.Quit()
-		// TODO: Add uploadPool.Quit() when fixed in nntppool
-		// logger.DebugContext(ctx, "Closing upload pool")
-		// uploadPool.Quit()
+		_ = downloadPool.Close()
+		logger.DebugContext(ctx, "Closing upload pool")
+		_ = uploadPool.Close()
 	}()
 
 	outputFile, err := getSingleOutputFilePath(nzbFile, outputFileOrDir)
@@ -139,17 +139,16 @@ func RunWatcher(ctx context.Context, cfg config.Config, watchDir string, dbPath 
 	// Create the par2 executor
 	par2Executor := &repairnzb.Par2CmdExecutor{ExePath: par2ExePath}
 
-	uploadPool, downloadPool, err := createPools(cfg)
+	uploadPool, downloadPool, err := createPools(ctx, cfg)
 	if err != nil {
 		return err
 	}
 
 	defer func() {
 		logger.DebugContext(ctx, "Closing download pool")
-		downloadPool.Quit()
-		// TODO: Add uploadPool.Quit() when fixed in nntppool
-		// logger.DebugContext(ctx, "Closing upload pool")
-		// uploadPool.Quit()
+		_ = downloadPool.Close()
+		logger.DebugContext(ctx, "Closing upload pool")
+		_ = uploadPool.Close()
 	}()
 
 	fileScanner := scanner.New(watchDir, dbQueue, logger, cfg.ScanInterval)
@@ -332,19 +331,50 @@ func ensurePar2Executable(ctx context.Context, cfg config.Config, logger *slog.L
 	return execPath, nil
 }
 
+// toNNTPProvider converts a config.ProviderConfig to a nntppool/v4 Provider.
+func toNNTPProvider(p config.ProviderConfig) nntppool.Provider {
+	host := p.Host
+	if p.Port > 0 {
+		host = fmt.Sprintf("%s:%d", p.Host, p.Port)
+	}
+
+	var tlsCfg *tls.Config
+	if p.TLS {
+		tlsCfg = &tls.Config{InsecureSkipVerify: p.InsecureSSL} //nolint:gosec
+	}
+
+	return nntppool.Provider{
+		Host:        host,
+		TLSConfig:   tlsCfg,
+		Auth:        nntppool.Auth{Username: p.Username, Password: p.Password},
+		Connections: p.Connections,
+		Inflight:    p.Inflight,
+		Backup:      p.Backup,
+		IdleTimeout: p.IdleTimeout,
+		SkipPing:    p.SkipPing,
+	}
+}
+
 // createPools initializes and returns the NNTP connection pools.
-func createPools(cfg config.Config) (uploadPool, downloadPool nntppool.UsenetConnectionPool, err error) {
-	uploadPool, err = nntppool.NewConnectionPool(nntppool.Config{Providers: cfg.UploadProviders})
+func createPools(ctx context.Context, cfg config.Config) (uploadPool, downloadPool *nntppool.Client, err error) {
+	uploadProviders := make([]nntppool.Provider, len(cfg.UploadProviders))
+	for i, p := range cfg.UploadProviders {
+		uploadProviders[i] = toNNTPProvider(p)
+	}
+
+	uploadPool, err = nntppool.NewClient(ctx, uploadProviders)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create upload pool: %w", err)
 	}
 
-	downloadPool, err = nntppool.NewConnectionPool(nntppool.Config{Providers: cfg.DownloadProviders})
+	downloadProviders := make([]nntppool.Provider, len(cfg.DownloadProviders))
+	for i, p := range cfg.DownloadProviders {
+		downloadProviders[i] = toNNTPProvider(p)
+	}
+
+	downloadPool, err = nntppool.NewClient(ctx, downloadProviders)
 	if err != nil {
-		// Make sure to quit the already created uploadPool if downloadPool fails
-		if uploadPool != nil {
-			uploadPool.Quit()
-		}
+		_ = uploadPool.Close()
 		return nil, nil, fmt.Errorf("failed to create download pool: %w", err)
 	}
 

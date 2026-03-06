@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 	"time"
 
 	"github.com/Tensai75/nzbparser"
-	"github.com/javi11/nntppool"
+	nntppool "github.com/javi11/nntppool/v4"
 	"github.com/javi11/nzb-repair/internal/config"
 	"github.com/k0kubun/go-ansi"
 	"github.com/mnightingale/rapidyenc"
@@ -22,11 +23,19 @@ import (
 	"github.com/sourcegraph/conc/pool"
 )
 
+// NNTPPool is the interface for NNTP operations used by the repair process.
+// *nntppool.Client satisfies this interface.
+type NNTPPool interface {
+	BodyStream(ctx context.Context, messageID string, w io.Writer, onMeta ...func(nntppool.YEncMeta)) (*nntppool.ArticleBody, error)
+	PostYenc(ctx context.Context, headers nntppool.PostHeaders, body io.Reader, meta rapidyenc.Meta) (*nntppool.PostResult, error)
+	Close() error
+}
+
 func RepairNzb(
 	ctx context.Context,
 	cfg config.Config,
-	downloadPool nntppool.UsenetConnectionPool,
-	uploadPool nntppool.UsenetConnectionPool,
+	downloadPool NNTPPool,
+	uploadPool NNTPPool,
 	par2Executor Par2Executor,
 	nzbFile string,
 	outputFile string,
@@ -216,11 +225,9 @@ func replaceBrokenSegments(
 	brokenSegments map[*nzbparser.NzbFile][]brokenSegment,
 	tmpFolder string,
 	cfg config.Config,
-	uploadPool nntppool.UsenetConnectionPool,
+	uploadPool NNTPPool,
 	nzb *nzbparser.Nzb,
 ) error {
-	encoder := rapidyenc.NewEncoder()
-
 	for nzbFile, bs := range brokenSegments {
 		if ctx.Err() != nil {
 			slog.ErrorContext(ctx, "repair canceled")
@@ -282,33 +289,26 @@ func replaceBrokenSegments(
 
 				msgId := generateRandomMessageID()
 
-				ar := articleData{
-					PartNum:   int64(s.segment.Number),
-					PartTotal: fileSize / partSize,
-					PartSize:  partSize,
-					PartBegin: int64((s.segment.Number - 1) * s.segment.Bytes),
-					PartEnd:   int64(s.segment.Number * s.segment.Bytes),
-					FileNum:   s.file.Number,
-					FileTotal: 1,
-					FileSize:  fileSize,
+				headers := nntppool.PostHeaders{
+					From:      nzbFile.Poster,
 					Subject:   subject,
-					Poster:    nzbFile.Poster,
-					Groups:    nzbFile.Groups,
-					Filename:  fName,
-					Date:      &date,
-					body:      buff,
-					MsgId:     msgId,
+					Newsgroups: nzbFile.Groups,
+					MessageID: fmt.Sprintf("<%s>", msgId),
+					Extra: map[string][]string{
+						"Date": {date.UTC().Format(time.RFC1123)},
+					},
 				}
 
-				r, err := ar.EncodeBytes(encoder)
-				if err != nil {
-					slog.With("err", err).ErrorContext(ctx, "failed to encode segment")
-
-					return err
+				meta := rapidyenc.Meta{
+					FileName:   fName,
+					FileSize:   fileSize,
+					PartSize:   partSize,
+					PartNumber: int64(s.segment.Number),
+					TotalParts: int64(s.file.TotalSegments),
 				}
 
 				// Upload the segment
-				err = uploadPool.Post(ctx, r)
+				_, err = uploadPool.PostYenc(ctx, headers, bytes.NewReader(buff), meta)
 				if err != nil {
 					slog.With("err", err).ErrorContext(ctx, "failed to upload segment")
 
@@ -347,7 +347,7 @@ func replaceBrokenSegments(
 func downloadWorker(
 	ctx context.Context,
 	config config.Config,
-	downloadPool nntppool.UsenetConnectionPool,
+	downloadPool NNTPPool,
 	file nzbparser.NzbFile,
 	brokenSegmentCh chan<- brokenSegment,
 	tmpFolder string,
@@ -407,8 +407,8 @@ func downloadWorker(
 		default:
 			p.Go(func(c context.Context) error {
 				buff := bytes.NewBuffer(make([]byte, 0))
-				if _, err := downloadPool.Body(c, s.Id, buff, file.Groups); err != nil {
-					if errors.Is(err, nntppool.ErrArticleNotFoundInProviders) {
+				if _, err := downloadPool.BodyStream(c, s.Id, buff); err != nil {
+					if errors.Is(err, nntppool.ErrArticleNotFound) {
 						if brokenSegmentCh != nil {
 							slog.DebugContext(ctx, fmt.Sprintf("segment %s not found, sending for repair: %v", s.Id, err))
 
