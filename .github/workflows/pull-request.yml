@@ -35,7 +35,7 @@ jobs:
       # Include go
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.24.0
+          go-version-file: 'go.mod'
 
       # checkout
       - name: Checkout

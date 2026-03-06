@@ -39,7 +39,7 @@ jobs:
       # Include go and NodeJS
       - uses: actions/setup-go@v5
         with:
-          go-version: 1.24.0
+          go-version-file: 'go.mod'
 
       # Include latest bun
       - uses: oven-sh/setup-bun@v2

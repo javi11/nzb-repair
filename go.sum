@@ -258,8 +258,8 @@ github.com/javi11/nntp-server-mock v0.0.1 h1:05KbUlFSnzk82CG/sHWLp9s6Vg8exL3wvdA
 github.com/javi11/nntp-server-mock v0.0.1/go.mod h1:+QBpPor0q44ttab8kWo08+/t5C26IHhUpBTC1lZqujA=
 github.com/javi11/nntpcli v0.5.0 h1:AS5p/at3i21H7ULsxRMBDSjzgUoID4U6jZJ8yMtZSt8=
 github.com/javi11/nntpcli v0.5.0/go.mod h1:dMqGOavcFyeGKQZei+6QYUfn2BF29S1t36B0dA7vnFA=
-github.com/javi11/nntppool v0.2.1 h1:cPSgjbK7bCEpoH+nyPFMNcVslxN/SyfOEoEs6ss3qZc=
-github.com/javi11/nntppool v0.2.1/go.mod h1:MQUzmyt//R7jK8uc4Ga7puO4N/E1udXefurM7y1e7lE=
+github.com/javi11/nntppool/v4 v4.5.0 h1:F4Fvb0VD03a3KbjU84JXsuC+WjehQjS4A8pYlOorHxo=
+github.com/javi11/nntppool/v4 v4.5.0/go.mod h1:+UtisJLDFLXBSkW9R6uCRgdp3lS/+6pLAk7L+Wt6LMw=
 github.com/jgautheron/goconst v1.8.1 h1:PPqCYp3K/xlOj5JmIe6O1Mj6r1DbkdbLtR3AJuZo414=
 github.com/jgautheron/goconst v1.8.1/go.mod h1:A0oxgBCHy55NQn6sYpO7UdnA9p+h7cPtoOZUmvNIako=
 github.com/jgautheron/goconst v1.8.2/go.mod h1:A0oxgBCHy55NQn6sYpO7UdnA9p+h7cPtoOZUmvNIako=

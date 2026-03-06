@@ -1,6 +1,6 @@
 module github.com/javi11/nzb-repair
 
-go 1.24.0
+go 1.25.1
 
 tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
@@ -226,5 +226,3 @@ require (
 	mvdan.cc/gofumpt v0.9.2 // indirect
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )
-
-replace github.com/javi11/nntppool/v4 => /home/user/nntppool-v4
