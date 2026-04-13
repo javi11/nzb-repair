@@ -3,15 +3,12 @@ package repairnzb
 import (
 	"bytes"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"strings"
 	"time"
-)
 
-type Encoder interface {
-	Encode(p []byte) []byte
-}
+	"github.com/mnightingale/rapidyenc"
+)
 
 type articleData struct {
 	PartNum       int64             `json:"part_num"`
@@ -33,64 +30,54 @@ type articleData struct {
 	body          []byte
 }
 
-func (a *articleData) EncodeBytes(encoder Encoder) (io.Reader, error) {
-	headers := make(map[string]string)
+func (a *articleData) EncodeBytes() (io.Reader, error) {
+	var buf bytes.Buffer
 
-	if a.CustomHeaders != nil {
-		for k, v := range a.CustomHeaders {
-			headers[k] = v
-		}
+	// Write article headers
+	if a.Date == nil {
+		fmt.Fprintf(&buf, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123))
+	} else {
+		fmt.Fprintf(&buf, "Date: %s\r\n", a.Date.UTC().Format(time.RFC1123))
 	}
 
-	headers["Subject"] = a.Subject
-	headers["From"] = a.Poster
-	headers["Newsgroups"] = strings.Join(a.Groups, ",")
-	headers["Message-ID"] = fmt.Sprintf("<%s>", a.MsgId)
+	fmt.Fprintf(&buf, "Subject: %s\r\n", a.Subject)
+	fmt.Fprintf(&buf, "From: %s\r\n", a.Poster)
+	fmt.Fprintf(&buf, "Newsgroups: %s\r\n", strings.Join(a.Groups, ","))
+	fmt.Fprintf(&buf, "Message-ID: <%s>\r\n", a.MsgId)
 
 	if a.XNxgHeader != "" {
-		headers["X-Nxg"] = a.XNxgHeader
+		fmt.Fprintf(&buf, "X-Nxg: %s\r\n", a.XNxgHeader)
 	}
 
-	if a.Date == nil {
-		headers["Date"] = time.Now().UTC().Format(time.RFC1123)
-	} else {
-		headers["Date"] = a.Date.UTC().Format(time.RFC1123)
+	for k, v := range a.CustomHeaders {
+		fmt.Fprintf(&buf, "%s: %s\r\n", k, v)
 	}
 
-	header := ""
-	for k, v := range headers {
-		header += fmt.Sprintf("%s: %s\r\n", k, v)
+	// Blank line separating headers from body
+	buf.WriteString("\r\n")
+
+	// yEnc encode body via streaming encoder (handles =ybegin, =ypart, =yend automatically)
+	meta := rapidyenc.Meta{
+		FileName:   a.Filename,
+		FileSize:   a.FileSize,
+		PartNumber: a.PartNum,
+		TotalParts: a.PartTotal,
+		Offset:     a.PartBegin,
+		PartSize:   a.PartSize,
 	}
 
-	header += fmt.Sprintf("\r\n=ybegin part=%d total=%d line=128 size=%d name=%s\r\n=ypart begin=%d end=%d\r\n",
-		a.PartNum, a.PartTotal, a.FileSize, a.Filename, a.PartBegin+1, a.PartEnd)
-
-	// Encoded data
-	encoded := encoder.Encode(a.body)
-
-	// yEnc end line
-	h := crc32.NewIEEE()
-	_, err := h.Write(a.body)
-	if err != nil {
-		return nil, err
-	}
-	footer := fmt.Sprintf("\r\n=yend size=%d part=%d pcrc32=%08X\r\n", a.PartSize, a.PartNum, h.Sum32())
-
-	size := len(header) + len(encoded) + len(footer)
-	buf := bytes.NewBuffer(make([]byte, 0, size))
-
-	_, err = buf.WriteString(header)
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.Write(encoded)
-	if err != nil {
-		return nil, err
-	}
-	_, err = buf.WriteString(footer)
+	enc, err := rapidyenc.NewEncoder(&buf, meta)
 	if err != nil {
 		return nil, err
 	}
 
-	return buf, nil
+	if _, err := enc.Write(a.body); err != nil {
+		return nil, err
+	}
+
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+
+	return &buf, nil
 }

@@ -21,18 +21,52 @@ type Logger interface {
 	ErrorContext(ctx context.Context, msg string, args ...any)
 }
 
+// ProviderConfig wraps nntppool.UsenetProviderConfig with YAML tags for
+// user-friendly config files. Breaking change from previous versions: the
+// "ssl" field has been renamed to "tls".
+type ProviderConfig struct {
+	Host                           string   `yaml:"host"`
+	Port                           int      `yaml:"port"`
+	Username                       string   `yaml:"username"`
+	Password                       string   `yaml:"password"`
+	TLS                            bool     `yaml:"tls"`
+	InsecureSSL                    bool     `yaml:"insecure_ssl"`
+	MaxConnections                 int      `yaml:"max_connections"`
+	MaxConnectionIdleTimeInSeconds int      `yaml:"max_connection_idle_time_in_seconds"`
+	MaxConnectionTTLInSeconds      int      `yaml:"max_connection_ttl_in_seconds"`
+	IsBackupProvider               bool     `yaml:"is_backup_provider"`
+	VerifyCapabilities             []string `yaml:"verify_capabilities"`
+}
+
+// ToNntppool converts a ProviderConfig to the nntppool library type.
+func (p ProviderConfig) ToNntppool() nntppool.UsenetProviderConfig {
+	return nntppool.UsenetProviderConfig{
+		Host:                           p.Host,
+		Port:                           p.Port,
+		Username:                       p.Username,
+		Password:                       p.Password,
+		TLS:                            p.TLS,
+		InsecureSSL:                    p.InsecureSSL,
+		MaxConnections:                 p.MaxConnections,
+		MaxConnectionIdleTimeInSeconds: p.MaxConnectionIdleTimeInSeconds,
+		MaxConnectionTTLInSeconds:      p.MaxConnectionTTLInSeconds,
+		IsBackupProvider:               p.IsBackupProvider,
+		VerifyCapabilities:             p.VerifyCapabilities,
+	}
+}
+
 type Config struct {
 	// By default the number of connections for download providers is the sum of all MaxConnections
-	DownloadWorkers   int                             `yaml:"download_workers"`
-	UploadWorkers     int                             `yaml:"upload_workers"`
-	DownloadFolder    string                          `yaml:"download_folder"`
-	DownloadProviders []nntppool.UsenetProviderConfig `yaml:"download_providers"`
-	UploadProviders   []nntppool.UsenetProviderConfig `yaml:"upload_providers"`
-	Par2Exe           string                          `yaml:"par2_exe"`
-	Upload            UploadConfig                    `yaml:"upload"`
-	ScanInterval      time.Duration                   `yaml:"scan_interval"` // duration string like "5m", "1h"
-	MaxRetries        int64                           `yaml:"max_retries"`   // maximum number of retries before moving to broken folder
-	BrokenFolder      string                          `yaml:"broken_folder"` // folder to move broken files to
+	DownloadWorkers   int              `yaml:"download_workers"`
+	UploadWorkers     int              `yaml:"upload_workers"`
+	DownloadFolder    string           `yaml:"download_folder"`
+	DownloadProviders []ProviderConfig `yaml:"download_providers"`
+	UploadProviders   []ProviderConfig `yaml:"upload_providers"`
+	Par2Exe           string           `yaml:"par2_exe"`
+	Upload            UploadConfig     `yaml:"upload"`
+	ScanInterval      time.Duration    `yaml:"scan_interval"` // duration string like "5m", "1h"
+	MaxRetries        int64            `yaml:"max_retries"`   // maximum number of retries before moving to broken folder
+	BrokenFolder      string           `yaml:"broken_folder"` // folder to move broken files to
 }
 
 type UploadConfig struct {
@@ -48,11 +82,12 @@ const (
 
 type Option func(*Config)
 
+const (
+	defaultMaxConnections                 = 10
+	defaultMaxConnectionIdleTimeInSeconds = 2400
+)
+
 var (
-	providerConfigDefault = nntppool.Provider{
-		MaxConnections:                 10,
-		MaxConnectionIdleTimeInSeconds: 2400,
-	}
 	downloadWorkersDefault = 10
 	uploadWorkersDefault   = 10
 	scanIntervalDefault    = 5 * time.Minute
@@ -63,8 +98,8 @@ var (
 func mergeWithDefault(config ...Config) Config {
 	if len(config) == 0 {
 		return Config{
-			DownloadProviders: []nntppool.UsenetProviderConfig{},
-			UploadProviders:   []nntppool.UsenetProviderConfig{},
+			DownloadProviders: []ProviderConfig{},
+			UploadProviders:   []ProviderConfig{},
 			DownloadWorkers:   downloadWorkersDefault,
 			UploadWorkers:     uploadWorkersDefault,
 			DownloadFolder:    "./",
@@ -79,11 +114,11 @@ func mergeWithDefault(config ...Config) Config {
 	downloadWorkers := 0
 	for i, p := range cfg.DownloadProviders {
 		if p.MaxConnections == 0 {
-			p.MaxConnections = providerConfigDefault.MaxConnections
+			p.MaxConnections = defaultMaxConnections
 		}
 
 		if p.MaxConnectionIdleTimeInSeconds == 0 {
-			p.MaxConnectionIdleTimeInSeconds = providerConfigDefault.MaxConnectionIdleTimeInSeconds
+			p.MaxConnectionIdleTimeInSeconds = defaultMaxConnectionIdleTimeInSeconds
 		}
 
 		cfg.DownloadProviders[i] = p
@@ -97,11 +132,11 @@ func mergeWithDefault(config ...Config) Config {
 	uploadWorkers := 0
 	for i, p := range cfg.UploadProviders {
 		if p.MaxConnections == 0 {
-			p.MaxConnections = providerConfigDefault.MaxConnections
+			p.MaxConnections = defaultMaxConnections
 		}
 
 		if p.MaxConnectionIdleTimeInSeconds == 0 {
-			p.MaxConnectionIdleTimeInSeconds = providerConfigDefault.MaxConnectionIdleTimeInSeconds
+			p.MaxConnectionIdleTimeInSeconds = defaultMaxConnectionIdleTimeInSeconds
 		}
 
 		cfg.UploadProviders[i] = p

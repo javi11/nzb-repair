@@ -17,7 +17,6 @@ import (
 	"github.com/javi11/nntppool"
 	"github.com/javi11/nzb-repair/internal/config"
 	"github.com/k0kubun/go-ansi"
-	"github.com/mnightingale/rapidyenc"
 	"github.com/schollz/progressbar/v3"
 	"github.com/sourcegraph/conc/pool"
 )
@@ -219,8 +218,6 @@ func replaceBrokenSegments(
 	uploadPool nntppool.UsenetConnectionPool,
 	nzb *nzbparser.Nzb,
 ) error {
-	encoder := rapidyenc.NewEncoder()
-
 	for nzbFile, bs := range brokenSegments {
 		if ctx.Err() != nil {
 			slog.ErrorContext(ctx, "repair canceled")
@@ -300,7 +297,7 @@ func replaceBrokenSegments(
 					MsgId:     msgId,
 				}
 
-				r, err := ar.EncodeBytes(encoder)
+				r, err := ar.EncodeBytes()
 				if err != nil {
 					slog.With("err", err).ErrorContext(ctx, "failed to encode segment")
 

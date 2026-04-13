@@ -51,9 +51,8 @@ func RunSingleRepair(ctx context.Context, cfg config.Config, nzbFile string, out
 	defer func() {
 		logger.DebugContext(ctx, "Closing download pool")
 		downloadPool.Quit()
-		// TODO: Add uploadPool.Quit() when fixed in nntppool
-		// logger.DebugContext(ctx, "Closing upload pool")
-		// uploadPool.Quit()
+		logger.DebugContext(ctx, "Closing upload pool")
+		uploadPool.Quit()
 	}()
 
 	outputFile, err := getSingleOutputFilePath(nzbFile, outputFileOrDir)
@@ -147,9 +146,8 @@ func RunWatcher(ctx context.Context, cfg config.Config, watchDir string, dbPath 
 	defer func() {
 		logger.DebugContext(ctx, "Closing download pool")
 		downloadPool.Quit()
-		// TODO: Add uploadPool.Quit() when fixed in nntppool
-		// logger.DebugContext(ctx, "Closing upload pool")
-		// uploadPool.Quit()
+		logger.DebugContext(ctx, "Closing upload pool")
+		uploadPool.Quit()
 	}()
 
 	fileScanner := scanner.New(watchDir, dbQueue, logger, cfg.ScanInterval)
@@ -334,12 +332,12 @@ func ensurePar2Executable(ctx context.Context, cfg config.Config, logger *slog.L
 
 // createPools initializes and returns the NNTP connection pools.
 func createPools(cfg config.Config) (uploadPool, downloadPool nntppool.UsenetConnectionPool, err error) {
-	uploadPool, err = nntppool.NewConnectionPool(nntppool.Config{Providers: cfg.UploadProviders})
+	uploadPool, err = nntppool.NewConnectionPool(nntppool.Config{Providers: toNntppoolProviders(cfg.UploadProviders)})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create upload pool: %w", err)
 	}
 
-	downloadPool, err = nntppool.NewConnectionPool(nntppool.Config{Providers: cfg.DownloadProviders})
+	downloadPool, err = nntppool.NewConnectionPool(nntppool.Config{Providers: toNntppoolProviders(cfg.DownloadProviders)})
 	if err != nil {
 		// Make sure to quit the already created uploadPool if downloadPool fails
 		if uploadPool != nil {
@@ -349,6 +347,15 @@ func createPools(cfg config.Config) (uploadPool, downloadPool nntppool.UsenetCon
 	}
 
 	return uploadPool, downloadPool, nil
+}
+
+// toNntppoolProviders converts a slice of config.ProviderConfig to nntppool.UsenetProviderConfig.
+func toNntppoolProviders(providers []config.ProviderConfig) []nntppool.UsenetProviderConfig {
+	result := make([]nntppool.UsenetProviderConfig, len(providers))
+	for i, p := range providers {
+		result[i] = p.ToNntppool()
+	}
+	return result
 }
 
 // getSingleOutputFilePath determines the output path for a single file repair.
