@@ -49,7 +49,9 @@ jobs:
 
       - name: Determine Branch
         id: branch
-        uses: transferwise/sanitize-branch-name@v1
+        run: |
+          sanitized=$(echo "${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          echo "sanitized-branch-name=$sanitized" >> "$GITHUB_OUTPUT"
 
       # build
       - name: build artifacts
