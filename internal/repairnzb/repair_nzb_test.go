@@ -10,9 +10,10 @@ import (
 	"testing"
 
 	"github.com/Tensai75/nzbparser"
-	"github.com/javi11/nntppool"
+	nntppool "github.com/javi11/nntppool/v4"
 	"github.com/javi11/nzb-repair/internal/config"
 	"github.com/javi11/nzb-repair/internal/mocks" // Import the generated mocks
+	"github.com/mnightingale/rapidyenc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -33,8 +34,8 @@ func TestRepairNzb(t *testing.T) {
 		},
 	}
 
-	mockDownloadPool := nntppool.NewMockUsenetConnectionPool(ctrl)
-	mockUploadPool := nntppool.NewMockUsenetConnectionPool(ctrl)
+	mockDownloadPool := mocks.NewMockNNTPPool(ctrl)
+	mockUploadPool := mocks.NewMockNNTPPool(ctrl)
 	mockPar2Executor := mocks.NewMockPar2Executor(ctrl) // Instantiate the mock executor
 
 	// Create a temporary directory for testing
@@ -86,11 +87,11 @@ func TestRepairNzb(t *testing.T) {
 
 	// Download Expectations:
 	// Segment 1 (broken) - Not Found
-	mockDownloadPool.EXPECT().Body(gomock.Any(), brokenSegmentID, gomock.Any(), gomock.Any()).
-		Return(int64(0), nntppool.ErrArticleNotFoundInProviders)
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), brokenSegmentID, gomock.Any()).
+		Return(nil, nntppool.ErrArticleNotFound)
 	// Segment 2 (good) - Found & Written
-	mockDownloadPool.EXPECT().Body(gomock.Any(), goodSegmentID, gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, writer io.Writer, _ []string) (int64, error) {
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), goodSegmentID, gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, writer io.Writer, _ ...func(nntppool.YEncMeta)) (*nntppool.ArticleBody, error) {
 			if writer != nil {
 				// Simulate writing segment 2 content to the correct offset in the temp file
 				// Note: This write happens *before* par2 repair in the actual code flow.
@@ -105,16 +106,16 @@ func TestRepairNzb(t *testing.T) {
 				// Segment size is tricky here, use fixed size from NZB for segment 2
 				_, err = file.WriteAt([]byte(originalDataFileContentSegment2), int64(len(repairedDataContent)/2))
 				require.NoError(t, err)
-				// Simulate the io.Copy happening in the actual Body call
+				// Simulate the io.Copy happening in the actual BodyStream call
 				_, err = writer.Write([]byte(originalDataFileContentSegment2))
 				require.NoError(t, err)
 			}
 
-			return int64(len(originalDataFileContentSegment2)), nil
+			return &nntppool.ArticleBody{}, nil
 		}).Times(1)
 	// Par2 Segment - Found & Written
-	mockDownloadPool.EXPECT().Body(gomock.Any(), parSegmentID, gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ string, writer io.Writer, _ []string) (int64, error) {
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), parSegmentID, gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, writer io.Writer, _ ...func(nntppool.YEncMeta)) (*nntppool.ArticleBody, error) {
 			// Simulate writing the par2 file content
 			parFilePath := filepath.Join(tmpDir, par2FileName)
 			parContent := []byte("dummy par2 data")
@@ -126,7 +127,7 @@ func TestRepairNzb(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			return int64(len(parContent)), nil
+			return &nntppool.ArticleBody{}, nil
 		}).Times(1)
 
 	// Par2 Repair Expectation:
@@ -142,15 +143,14 @@ func TestRepairNzb(t *testing.T) {
 		}).Times(1)
 
 	// Upload Expectation:
-	// Expect Post to be called once for the repaired segment (segment 1)
+	// Expect PostYenc to be called once for the repaired segment (segment 1)
 	var postedArticle bytes.Buffer
-	mockUploadPool.EXPECT().Post(gomock.Any(), gomock.AssignableToTypeOf(&postedArticle)).
-		DoAndReturn(func(ctx context.Context, article io.Reader) error {
+	mockUploadPool.EXPECT().PostYenc(gomock.Any(), gomock.Any(), gomock.Any(), gomock.AssignableToTypeOf(rapidyenc.Meta{})).
+		DoAndReturn(func(ctx context.Context, headers nntppool.PostHeaders, body io.Reader, meta rapidyenc.Meta) (*nntppool.PostResult, error) {
 			// Capture the posted article content if needed for assertion
-			_, err := io.Copy(&postedArticle, article)
+			_, err := io.Copy(&postedArticle, body)
 			assert.NoError(t, err)
-			// TODO: Optionally assert content of postedArticle (yenc encoded segment 1)
-			return nil // Simulate successful upload
+			return &nntppool.PostResult{}, nil // Simulate successful upload
 		}).Times(1)
 
 	// --- Call the function ---
@@ -201,8 +201,8 @@ func TestRepairNzb_NoPar2Files(t *testing.T) {
 		UploadWorkers:   1,
 	}
 
-	mockDownloadPool := nntppool.NewMockUsenetConnectionPool(ctrl)
-	mockUploadPool := nntppool.NewMockUsenetConnectionPool(ctrl)
+	mockDownloadPool := mocks.NewMockNNTPPool(ctrl)
+	mockUploadPool := mocks.NewMockNNTPPool(ctrl)
 	mockPar2Executor := mocks.NewMockPar2Executor(ctrl)
 
 	inputDir := t.TempDir()
@@ -237,9 +237,9 @@ func TestRepairNzb_NoPar2Files(t *testing.T) {
 	// --- Mock Expectations ---
 	// No downloads, repairs, or uploads should be attempted as there are no par files.
 	// We expect the function to return early.
-	mockDownloadPool.EXPECT().Body(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0) // No downloads expected
-	mockPar2Executor.EXPECT().Repair(gomock.Any(), gomock.Any()).Times(0)                           // No repair expected
-	mockUploadPool.EXPECT().Post(gomock.Any(), gomock.Any()).Times(0)                               // No uploads expected
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), gomock.Any(), gomock.Any()).Times(0) // No downloads expected
+	mockPar2Executor.EXPECT().Repair(gomock.Any(), gomock.Any()).Times(0)                   // No repair expected
+	mockUploadPool.EXPECT().PostYenc(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0) // No uploads expected
 
 	// --- Call the function ---
 	err = RepairNzb(ctx, cfg, mockDownloadPool, mockUploadPool, mockPar2Executor, nzbFile, outputFile, tmpDir)

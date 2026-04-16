@@ -34,21 +34,21 @@ jobs:
       packages: write
       issues: write
     steps:
-      # dependencies
-      - uses: mlugg/setup-zig@v1
-      # Include go and NodeJS
-      - uses: actions/setup-go@v5
-        with:
-          go-version: 1.24.0
-
-      # Include latest bun
-      - uses: oven-sh/setup-bun@v2
-
       # checkout
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # dependencies
+      - uses: mlugg/setup-zig@v1
+      # Include go and NodeJS
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      # Include latest bun
+      - uses: oven-sh/setup-bun@v2
 
       # git status
       - name: Git status

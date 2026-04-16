@@ -5,7 +5,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/javi11/nntppool"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,18 +20,33 @@ type Logger interface {
 	ErrorContext(ctx context.Context, msg string, args ...any)
 }
 
+// ProviderConfig holds YAML-friendly NNTP provider settings that map to nntppool/v4 Provider.
+type ProviderConfig struct {
+	Host        string        `yaml:"host"`
+	Username    string        `yaml:"username"`
+	Password    string        `yaml:"password"`
+	Port        int           `yaml:"port"`
+	Connections int           `yaml:"connections"`
+	Inflight    int           `yaml:"inflight"`
+	TLS         bool          `yaml:"tls"`
+	InsecureSSL bool          `yaml:"insecure_ssl"`
+	Backup      bool          `yaml:"backup"`
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
+	SkipPing    bool          `yaml:"skip_ping"`
+}
+
 type Config struct {
-	// By default the number of connections for download providers is the sum of all MaxConnections
-	DownloadWorkers   int                             `yaml:"download_workers"`
-	UploadWorkers     int                             `yaml:"upload_workers"`
-	DownloadFolder    string                          `yaml:"download_folder"`
-	DownloadProviders []nntppool.UsenetProviderConfig `yaml:"download_providers"`
-	UploadProviders   []nntppool.UsenetProviderConfig `yaml:"upload_providers"`
-	Par2Exe           string                          `yaml:"par2_exe"`
-	Upload            UploadConfig                    `yaml:"upload"`
-	ScanInterval      time.Duration                   `yaml:"scan_interval"` // duration string like "5m", "1h"
-	MaxRetries        int64                           `yaml:"max_retries"`   // maximum number of retries before moving to broken folder
-	BrokenFolder      string                          `yaml:"broken_folder"` // folder to move broken files to
+	// By default the number of connections for download providers is the sum of all Connections
+	DownloadWorkers   int              `yaml:"download_workers"`
+	UploadWorkers     int              `yaml:"upload_workers"`
+	DownloadFolder    string           `yaml:"download_folder"`
+	DownloadProviders []ProviderConfig `yaml:"download_providers"`
+	UploadProviders   []ProviderConfig `yaml:"upload_providers"`
+	Par2Exe           string           `yaml:"par2_exe"`
+	Upload            UploadConfig     `yaml:"upload"`
+	ScanInterval      time.Duration    `yaml:"scan_interval"` // duration string like "5m", "1h"
+	MaxRetries        int64            `yaml:"max_retries"`   // maximum number of retries before moving to broken folder
+	BrokenFolder      string           `yaml:"broken_folder"` // folder to move broken files to
 }
 
 type UploadConfig struct {
@@ -49,9 +63,9 @@ const (
 type Option func(*Config)
 
 var (
-	providerConfigDefault = nntppool.Provider{
-		MaxConnections:                 10,
-		MaxConnectionIdleTimeInSeconds: 2400,
+	providerConfigDefault = ProviderConfig{
+		Connections: 10,
+		IdleTimeout: 2400 * time.Second,
 	}
 	downloadWorkersDefault = 10
 	uploadWorkersDefault   = 10
@@ -63,8 +77,8 @@ var (
 func mergeWithDefault(config ...Config) Config {
 	if len(config) == 0 {
 		return Config{
-			DownloadProviders: []nntppool.UsenetProviderConfig{},
-			UploadProviders:   []nntppool.UsenetProviderConfig{},
+			DownloadProviders: []ProviderConfig{},
+			UploadProviders:   []ProviderConfig{},
 			DownloadWorkers:   downloadWorkersDefault,
 			UploadWorkers:     uploadWorkersDefault,
 			DownloadFolder:    "./",
@@ -78,16 +92,16 @@ func mergeWithDefault(config ...Config) Config {
 
 	downloadWorkers := 0
 	for i, p := range cfg.DownloadProviders {
-		if p.MaxConnections == 0 {
-			p.MaxConnections = providerConfigDefault.MaxConnections
+		if p.Connections == 0 {
+			p.Connections = providerConfigDefault.Connections
 		}
 
-		if p.MaxConnectionIdleTimeInSeconds == 0 {
-			p.MaxConnectionIdleTimeInSeconds = providerConfigDefault.MaxConnectionIdleTimeInSeconds
+		if p.IdleTimeout == 0 {
+			p.IdleTimeout = providerConfigDefault.IdleTimeout
 		}
 
 		cfg.DownloadProviders[i] = p
-		downloadWorkers += p.MaxConnections
+		downloadWorkers += p.Connections
 	}
 
 	if cfg.DownloadWorkers == 0 {
@@ -96,16 +110,16 @@ func mergeWithDefault(config ...Config) Config {
 
 	uploadWorkers := 0
 	for i, p := range cfg.UploadProviders {
-		if p.MaxConnections == 0 {
-			p.MaxConnections = providerConfigDefault.MaxConnections
+		if p.Connections == 0 {
+			p.Connections = providerConfigDefault.Connections
 		}
 
-		if p.MaxConnectionIdleTimeInSeconds == 0 {
-			p.MaxConnectionIdleTimeInSeconds = providerConfigDefault.MaxConnectionIdleTimeInSeconds
+		if p.IdleTimeout == 0 {
+			p.IdleTimeout = providerConfigDefault.IdleTimeout
 		}
 
 		cfg.UploadProviders[i] = p
-		uploadWorkers += p.MaxConnections
+		uploadWorkers += p.Connections
 	}
 
 	if cfg.UploadWorkers == 0 {
