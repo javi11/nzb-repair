@@ -34,6 +34,12 @@ jobs:
       packages: write
       issues: write
     steps:
+      # checkout
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       # dependencies
       - uses: mlugg/setup-zig@v1
       # Include go and NodeJS
@@ -43,12 +49,6 @@ jobs:
 
       # Include latest bun
       - uses: oven-sh/setup-bun@v2
-
-      # checkout
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       # git status
       - name: Git status
