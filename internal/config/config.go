@@ -47,6 +47,11 @@ type Config struct {
 	ScanInterval      time.Duration    `yaml:"scan_interval"` // duration string like "5m", "1h"
 	MaxRetries        int64            `yaml:"max_retries"`   // maximum number of retries before moving to broken folder
 	BrokenFolder      string           `yaml:"broken_folder"` // folder to move broken files to
+	// Par2RecreateThreshold is the fraction of missing par2 segments that triggers
+	// recreation of the par2 set. 0 = disabled. Example: 0.1 = recreate when ≥10% missing.
+	Par2RecreateThreshold float64 `yaml:"par2_recreate_threshold"`
+	// Par2RecreateRedundancy is the recovery percentage used when creating a new par2 set.
+	Par2RecreateRedundancy int `yaml:"par2_recreate_redundancy"`
 }
 
 type UploadConfig struct {
@@ -77,14 +82,15 @@ var (
 func mergeWithDefault(config ...Config) Config {
 	if len(config) == 0 {
 		return Config{
-			DownloadProviders: []ProviderConfig{},
-			UploadProviders:   []ProviderConfig{},
-			DownloadWorkers:   downloadWorkersDefault,
-			UploadWorkers:     uploadWorkersDefault,
-			DownloadFolder:    "./",
-			ScanInterval:      scanIntervalDefault,
-			MaxRetries:        maxRetriesDefault,
-			BrokenFolder:      brokenFolderDefault,
+			DownloadProviders:      []ProviderConfig{},
+			UploadProviders:        []ProviderConfig{},
+			DownloadWorkers:        downloadWorkersDefault,
+			UploadWorkers:          uploadWorkersDefault,
+			DownloadFolder:         "./",
+			ScanInterval:           scanIntervalDefault,
+			MaxRetries:             maxRetriesDefault,
+			BrokenFolder:           brokenFolderDefault,
+			Par2RecreateRedundancy: 10,
 		}
 	}
 
@@ -136,6 +142,10 @@ func mergeWithDefault(config ...Config) Config {
 
 	if cfg.BrokenFolder == "" {
 		cfg.BrokenFolder = brokenFolderDefault
+	}
+
+	if cfg.Par2RecreateRedundancy == 0 {
+		cfg.Par2RecreateRedundancy = 10
 	}
 
 	return cfg
