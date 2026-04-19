@@ -40,6 +40,21 @@ func (m *MockPar2Executor) EXPECT() *MockPar2ExecutorMockRecorder {
 	return m.recorder
 }
 
+// Create mocks base method.
+func (m *MockPar2Executor) Create(ctx context.Context, tmpPath string, redundancy int) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Create", ctx, tmpPath, redundancy)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Create indicates an expected call of Create.
+func (mr *MockPar2ExecutorMockRecorder) Create(ctx, tmpPath, redundancy any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockPar2Executor)(nil).Create), ctx, tmpPath, redundancy)
+}
+
 // Repair mocks base method.
 func (m *MockPar2Executor) Repair(ctx context.Context, tmpPath string) error {
 	m.ctrl.T.Helper()

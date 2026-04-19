@@ -241,6 +241,58 @@ Done.`)
 	})
 }
 
+func TestPar2CmdExecutor_Create(t *testing.T) {
+	originalExecCommand := execCommand
+	execCommand = mockExecCommand
+	defer func() { execCommand = originalExecCommand }()
+
+	t.Run("Success", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "data.rar"), []byte("data"), 0644))
+
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "0")
+		_ = os.Setenv("TEST_PAR2_STDOUT", "")
+		_ = os.Setenv("TEST_PAR2_STDERR", "")
+		defer func() {
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
+		}()
+
+		p := &Par2CmdExecutor{ExePath: "par2"}
+		files, err := p.Create(context.Background(), tmpDir, 10)
+		require.NoError(t, err)
+		_ = files // mock doesn't actually create files
+	})
+
+	t.Run("Failure", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "data.rar"), []byte("data"), 0644))
+
+		_ = os.Setenv("TEST_PAR2_EXIT_CODE", "3")
+		_ = os.Setenv("TEST_PAR2_STDOUT", "")
+		_ = os.Setenv("TEST_PAR2_STDERR", "bad args")
+		defer func() {
+			_ = os.Unsetenv("TEST_PAR2_EXIT_CODE")
+			_ = os.Unsetenv("TEST_PAR2_STDOUT")
+			_ = os.Unsetenv("TEST_PAR2_STDERR")
+		}()
+
+		p := &Par2CmdExecutor{ExePath: "par2"}
+		_, err := p.Create(context.Background(), tmpDir, 10)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "par2 create failed")
+	})
+
+	t.Run("NoDataFiles", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		p := &Par2CmdExecutor{ExePath: "par2"}
+		files, err := p.Create(context.Background(), tmpDir, 10)
+		require.NoError(t, err)
+		assert.Empty(t, files)
+	})
+}
+
 // testHelperProcess is run when the test binary is executed with a specific env var.
 // It simulates the behavior of the par2 command based on environment variables.
 func testHelperProcess(t *testing.T) {

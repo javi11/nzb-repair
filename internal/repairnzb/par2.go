@@ -26,6 +26,10 @@ var execCommand = exec.CommandContext
 // Par2Executor defines the interface for executing par2 commands.
 type Par2Executor interface {
 	Repair(ctx context.Context, tmpPath string) error
+	// Create generates a new par2 set for all non-par2 files in tmpPath.
+	// redundancy is the recovery percentage (e.g. 10 = 10%).
+	// Returns absolute paths of all generated .par2 files.
+	Create(ctx context.Context, tmpPath string, redundancy int) ([]string, error)
 }
 
 // Par2CmdExecutor implements Par2Executor using the command line.
@@ -80,6 +84,12 @@ func (p *Par2CmdExecutor) Repair(ctx context.Context, tmpPath string) error {
 	if par2Exe == "" {
 		par2Exe = "par2" // Default if path is empty
 		slog.WarnContext(ctx, "Par2 executable path is empty, defaulting to 'par2'")
+	} else if !filepath.IsAbs(par2Exe) {
+		// Resolve relative paths to absolute before setting cmd.Dir, otherwise the
+		// OS resolves them relative to cmd.Dir (the tmp directory) instead of cwd.
+		if absPath, err := filepath.Abs(par2Exe); err == nil {
+			par2Exe = absPath
+		}
 	}
 
 	exp, _ := regexp.Compile(`^.+\.par2`)
@@ -232,6 +242,74 @@ func (p *Par2CmdExecutor) Repair(ctx context.Context, tmpPath string) error {
 	slog.InfoContext(ctx, "Par2 repair completed successfully")
 
 	return nil
+}
+
+// Create generates a new par2 set protecting all non-par2 files in tmpPath.
+func (p *Par2CmdExecutor) Create(ctx context.Context, tmpPath string, redundancy int) ([]string, error) {
+	slog.InfoContext(ctx, "Creating par2 set", "tmpPath", tmpPath, "redundancy", redundancy)
+
+	par2Exe := p.ExePath
+	if par2Exe == "" {
+		par2Exe = "par2"
+	} else if !filepath.IsAbs(par2Exe) {
+		if absPath, err := filepath.Abs(par2Exe); err == nil {
+			par2Exe = absPath
+		}
+	}
+
+	// Collect non-par2 files to protect
+	var dataFiles []string
+	if err := filepath.Walk(tmpPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && !parregexp.MatchString(filepath.Base(info.Name())) {
+			dataFiles = append(dataFiles, info.Name())
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("failed to list data files: %w", err)
+	}
+
+	if len(dataFiles) == 0 {
+		slog.InfoContext(ctx, "No data files found to protect with par2")
+		return nil, nil
+	}
+
+	archiveName := "repair.par2"
+	args := append([]string{"c", fmt.Sprintf("-r%d", redundancy), archiveName}, dataFiles...)
+	cmd := execCommand(ctx, par2Exe, args...)
+	cmd.Dir = tmpPath
+
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		code := -1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		}
+		msg, known := par2ExitCodes[code]
+		if !known {
+			msg = fmt.Sprintf("unknown exit code %d", code)
+		}
+		return nil, fmt.Errorf("par2 create failed (%s): %s", msg, stderr.String())
+	}
+
+	// Collect all generated .par2 files
+	var par2Files []string
+	_ = filepath.Walk(tmpPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if parregexp.MatchString(filepath.Base(info.Name())) {
+			par2Files = append(par2Files, path)
+		}
+		return nil
+	})
+
+	slog.InfoContext(ctx, "Created par2 set", "files", len(par2Files))
+	return par2Files, nil
 }
 
 // scanLines is a helper for bufio.Scanner to split lines correctly
