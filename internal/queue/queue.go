@@ -160,7 +160,7 @@ func (q *Queue) AddJob(filePath string, relativePath string) error {
 		}
 	} else {
 		// Job exists
-		if currentStatus == StatusFailed || currentStatus == StatusCompleted {
+		if currentStatus == StatusFailed {
 			// Job failed or completed, reset to pending and update relative path just in case
 			updateQuery := `UPDATE jobs SET status = ?, error_msg = NULL, updated_at = ?, relative_path = ? WHERE filepath = ?`
 			_, err = tx.Exec(updateQuery, StatusPending, now, relativePath, filePath)

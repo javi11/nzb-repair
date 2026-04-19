@@ -31,6 +31,131 @@ type NNTPPool interface {
 	Close() error
 }
 
+const defaultSegmentSize = 750_000 // bytes per uploaded segment for recreated par2 files
+
+// countMissingParSegments checks par2 segments without writing to disk.
+// Returns (missing, total, error).
+func countMissingParSegments(
+	ctx context.Context,
+	downloadPool NNTPPool,
+	parFiles []nzbparser.NzbFile,
+) (missing, total int64, err error) {
+	for _, f := range parFiles {
+		for _, s := range f.Segments {
+			total++
+			if ctx.Err() != nil {
+				return missing, total, ctx.Err()
+			}
+			_, segErr := downloadPool.BodyStream(ctx, s.Id, io.Discard)
+			if segErr != nil {
+				if errors.Is(segErr, nntppool.ErrArticleNotFound) {
+					missing++
+				} else if !errors.Is(segErr, context.Canceled) {
+					return missing, total, fmt.Errorf("error checking par2 segment %s: %w", s.Id, segErr)
+				}
+			}
+		}
+	}
+	return missing, total, nil
+}
+
+// uploadPar2Files uploads generated par2 files and returns new NzbFile entries.
+func uploadPar2Files(
+	ctx context.Context,
+	par2FilePaths []string,
+	cfg config.Config,
+	uploadPool NNTPPool,
+	nzb *nzbparser.Nzb,
+) ([]nzbparser.NzbFile, error) {
+	var newFiles []nzbparser.NzbFile
+
+	groups := []string{}
+	if len(nzb.Files) > 0 {
+		groups = nzb.Files[0].Groups
+	}
+
+	for _, path := range par2FilePaths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read par2 file %s: %w", path, err)
+		}
+
+		filename := filepath.Base(path)
+		fileSize := int64(len(data))
+		segSize := defaultSegmentSize
+		totalSegments := (len(data) + segSize - 1) / segSize
+
+		nzbFile := nzbparser.NzbFile{
+			Filename:      filename,
+			Basefilename:  filename,
+			Poster:        "nzb-repair",
+			Date:          int(time.Now().Unix()),
+			TotalSegments: totalSegments,
+			Bytes:         fileSize,
+			Groups:        groups,
+		}
+
+		p := pool.New().WithContext(ctx).
+			WithMaxGoroutines(cfg.UploadWorkers).
+			WithCancelOnError()
+
+		segments := make([]nzbparser.NzbSegment, totalSegments)
+		for i := range totalSegments {
+			segNum := i + 1
+			start := i * segSize
+			end := start + segSize
+			if end > len(data) {
+				end = len(data)
+			}
+			chunk := make([]byte, end-start)
+			copy(chunk, data[start:end])
+
+			p.Go(func(ctx context.Context) error {
+				msgId := generateRandomMessageID()
+				subject := fmt.Sprintf("[1/1] \"%s\" yEnc (%d/%d)", filename, segNum, totalSegments)
+				fName := filename
+				if cfg.Upload.ObfuscationPolicy != config.ObfuscationPolicyNone {
+					fName = rand.Text()
+					subject = rand.Text()
+				}
+
+				headers := nntppool.PostHeaders{
+					From:       "nzb-repair",
+					Subject:    subject,
+					Newsgroups: groups,
+					MessageID:  fmt.Sprintf("<%s>", msgId),
+				}
+				meta := rapidyenc.Meta{
+					FileName:   fName,
+					FileSize:   fileSize,
+					PartSize:   int64(len(chunk)),
+					PartNumber: int64(segNum),
+					TotalParts: int64(totalSegments),
+				}
+				if _, err := uploadPool.PostYenc(ctx, headers, bytes.NewReader(chunk), meta); err != nil {
+					return fmt.Errorf("failed to upload par2 segment: %w", err)
+				}
+				segments[i] = nzbparser.NzbSegment{
+					Bytes:  len(chunk),
+					Number: segNum,
+					Id:     msgId,
+				}
+				return nil
+			})
+		}
+
+		if err := p.Wait(); err != nil {
+			return nil, err
+		}
+
+		nzbFile.Segments = segments
+		newFiles = append(newFiles, nzbFile)
+		slog.InfoContext(ctx, "Uploaded par2 file", "filename", filename, "segments", totalSegments)
+	}
+
+	return newFiles, nil
+}
+
 func RepairNzb(
 	ctx context.Context,
 	cfg config.Config,
@@ -137,38 +262,79 @@ func RepairNzb(
 
 	slog.InfoContext(ctx, fmt.Sprintf("%d files downloaded in %s", len(restFiles), elapsed))
 
-	if len(brokenSegments) == 0 {
-		slog.InfoContext(ctx, "No broken segments found, stopping repair.")
+	// Check par2 threshold (if configured)
+	needsParRecreation := false
+	if cfg.Par2RecreateThreshold > 0 && len(parFiles) > 0 {
+		missing, total, countErr := countMissingParSegments(ctx, downloadPool, parFiles)
+		if countErr != nil {
+			slog.With("err", countErr).WarnContext(ctx, "failed to count missing par2 segments, skipping threshold check")
+		} else if total > 0 {
+			ratio := float64(missing) / float64(total)
+			slog.InfoContext(ctx, fmt.Sprintf("par2 segments: %d/%d missing (%.1f%%)", missing, total, ratio*100))
+			if ratio >= cfg.Par2RecreateThreshold {
+				slog.InfoContext(ctx, "par2 missing threshold exceeded, will recreate par2 set")
+				needsParRecreation = true
+			}
+		}
+	}
+
+	if len(brokenSegments) == 0 && !needsParRecreation {
+		slog.InfoContext(ctx, "No broken segments and par2 is healthy, stopping repair.")
 
 		return nil
 	}
 
-	// Download par2 files
-	slog.InfoContext(ctx, fmt.Sprintf("%d broken segments found. Downloading par2 files", len(brokenSegments)))
-	for _, f := range parFiles {
-		if ctx.Err() != nil {
-			return nil
+	// Repair broken data segments (if any)
+	if len(brokenSegments) > 0 {
+		slog.InfoContext(ctx, fmt.Sprintf("%d broken segments found. Downloading par2 files", len(brokenSegments)))
+		for _, f := range parFiles {
+			if ctx.Err() != nil {
+				return nil
+			}
+
+			if err := downloadWorker(ctx, cfg, downloadPool, f, nil, tmpDir); err != nil {
+				slog.With("err", err).InfoContext(ctx, "failed to download par2 file, cancelling repair")
+			}
 		}
 
-		err := downloadWorker(ctx, cfg, downloadPool, f, nil, tmpDir)
-		if err != nil {
-			slog.With("err", err).InfoContext(ctx, "failed to download par2 file, cancelling repair")
+		if err := par2Executor.Repair(ctx, tmpDir); err != nil {
+			slog.With("err", err).ErrorContext(ctx, "failed to repair files")
 		}
+
+		startTime = time.Now()
+		if err := replaceBrokenSegments(ctx, brokenSegments, tmpDir, cfg, uploadPool, nzb); err != nil {
+			slog.With("err", err).ErrorContext(ctx, "failed to upload repaired files")
+			return err
+		}
+		slog.InfoContext(ctx, fmt.Sprintf("%d broken segments uploaded in %s", len(brokenSegments), time.Since(startTime)))
 	}
 
-	err = par2Executor.Repair(ctx, tmpDir)
-	if err != nil {
-		slog.With("err", err).ErrorContext(ctx, "failed to repair files")
-	}
+	// Recreate par2 set (if threshold exceeded)
+	if needsParRecreation {
+		slog.InfoContext(ctx, "Recreating par2 set")
+		newPar2Paths, createErr := par2Executor.Create(ctx, tmpDir, cfg.Par2RecreateRedundancy)
+		if createErr != nil {
+			slog.With("err", createErr).ErrorContext(ctx, "failed to create new par2 set")
+			return createErr
+		}
 
-	// Upload repaired files
-	startTime = time.Now()
+		if len(newPar2Paths) > 0 {
+			newPar2Files, uploadErr := uploadPar2Files(ctx, newPar2Paths, cfg, uploadPool, nzb)
+			if uploadErr != nil {
+				slog.With("err", uploadErr).ErrorContext(ctx, "failed to upload new par2 files")
+				return uploadErr
+			}
 
-	err = replaceBrokenSegments(ctx, brokenSegments, tmpDir, cfg, uploadPool, nzb)
-	if err != nil {
-		slog.With("err", err).ErrorContext(ctx, "failed to upload repaired files")
-
-		return err
+			// Replace par2 entries in NZB: remove old, add new
+			filtered := nzb.Files[:0]
+			for _, f := range nzb.Files {
+				if !parregexp.MatchString(f.Filename) {
+					filtered = append(filtered, f)
+				}
+			}
+			nzb.Files = append(filtered, newPar2Files...)
+			slog.InfoContext(ctx, fmt.Sprintf("Replaced par2 set with %d new files", len(newPar2Files)))
+		}
 	}
 
 	// write the repaired nzb file
