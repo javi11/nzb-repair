@@ -190,6 +190,172 @@ func TestRepairNzb(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "Par2 file should have been deleted by repair process (-p flag simulation)")
 }
 
+func TestRepairNzb_Par2ThresholdTriggersRecreation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	cfg := config.Config{
+		DownloadWorkers:        1,
+		UploadWorkers:          1,
+		Par2RecreateThreshold:  1.0, // 100% — 1/1 missing triggers recreation
+		Par2RecreateRedundancy: 10,
+		Upload: config.UploadConfig{ObfuscationPolicy: config.ObfuscationPolicyNone},
+	}
+
+	mockDownloadPool := mocks.NewMockNNTPPool(ctrl)
+	mockUploadPool := mocks.NewMockNNTPPool(ctrl)
+	mockPar2Executor := mocks.NewMockPar2Executor(ctrl)
+
+	inputDir := t.TempDir()
+	tmpDir := t.TempDir()
+	outputDir := t.TempDir()
+	outputFile := filepath.Join(outputDir, "out.nzb")
+	nzbFile := filepath.Join(inputDir, "input.nzb")
+
+	dataFileName := "video.mkv"
+	par2FileName := "video.mkv.par2"
+	dataSegID := "dataSeg1@test"
+	par2SegID := "par2Seg1@test"
+
+	nzbContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+ <file poster="test@example.com" date="1678886400" subject="[1/2] %s yEnc (1/1)">
+  <groups><group>alt.binaries.test</group></groups>
+  <segments><segment bytes="20" number="1">%s</segment></segments>
+ </file>
+ <file poster="test@example.com" date="1678886400" subject="[2/2] %s yEnc (1/1)">
+  <groups><group>alt.binaries.test</group></groups>
+  <segments><segment bytes="50" number="1">%s</segment></segments>
+ </file>
+</nzb>`, dataFileName, dataSegID, par2FileName, par2SegID)
+	require.NoError(t, os.WriteFile(nzbFile, []byte(nzbContent), 0644))
+
+	// Data segment found (no broken data segments)
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), dataSegID, gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, w io.Writer, _ ...func(nntppool.YEncMeta)) (*nntppool.ArticleBody, error) {
+			_, _ = w.Write([]byte("videodata"))
+			return &nntppool.ArticleBody{}, nil
+		}).Times(1)
+
+	// Par2 segment is missing → threshold triggered
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), par2SegID, gomock.Any()).
+		Return(nil, nntppool.ErrArticleNotFound).Times(1)
+
+	// Expect Create (threshold exceeded); Repair must NOT be called
+	mockPar2Executor.EXPECT().Create(gomock.Any(), gomock.Any(), 10).
+		Return([]string{}, nil).Times(1)
+
+	err := RepairNzb(ctx, cfg, mockDownloadPool, mockUploadPool, mockPar2Executor, nzbFile, outputFile, tmpDir)
+	require.NoError(t, err)
+}
+
+func TestRepairNzb_Par2ThresholdNotReached(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	cfg := config.Config{
+		DownloadWorkers:       1,
+		Par2RecreateThreshold: 0.5, // 50% — 0/1 missing, threshold not reached
+	}
+
+	mockDownloadPool := mocks.NewMockNNTPPool(ctrl)
+	mockPar2Executor := mocks.NewMockPar2Executor(ctrl)
+
+	inputDir := t.TempDir()
+	tmpDir := t.TempDir()
+	nzbFile := filepath.Join(inputDir, "input.nzb")
+
+	dataSegID := "dataSeg@test"
+	par2SegID := "par2Seg@test"
+
+	nzbContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+ <file poster="test@example.com" date="1678886400" subject="[1/2] data.mkv yEnc (1/1)">
+  <groups><group>alt.binaries.test</group></groups>
+  <segments><segment bytes="20" number="1">%s</segment></segments>
+ </file>
+ <file poster="test@example.com" date="1678886400" subject="[2/2] data.mkv.par2 yEnc (1/1)">
+  <groups><group>alt.binaries.test</group></groups>
+  <segments><segment bytes="50" number="1">%s</segment></segments>
+ </file>
+</nzb>`, dataSegID, par2SegID)
+	require.NoError(t, os.WriteFile(nzbFile, []byte(nzbContent), 0644))
+
+	// Data segment found
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), dataSegID, gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, w io.Writer, _ ...func(nntppool.YEncMeta)) (*nntppool.ArticleBody, error) {
+			_, _ = w.Write([]byte("data"))
+			return &nntppool.ArticleBody{}, nil
+		}).Times(1)
+
+	// Par2 segment found (0% missing, threshold not reached)
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), par2SegID, gomock.Any()).
+		Return(&nntppool.ArticleBody{}, nil).Times(1)
+
+	// No Create, no Repair
+	mockPar2Executor.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	mockPar2Executor.EXPECT().Repair(gomock.Any(), gomock.Any()).Times(0)
+
+	err := RepairNzb(ctx, cfg, mockDownloadPool, nil, mockPar2Executor, nzbFile, "", tmpDir)
+	require.NoError(t, err)
+}
+
+func TestRepairNzb_Par2ThresholdDisabled(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ctx := context.Background()
+	cfg := config.Config{
+		DownloadWorkers:       1,
+		Par2RecreateThreshold: 0, // disabled
+	}
+
+	mockDownloadPool := mocks.NewMockNNTPPool(ctrl)
+	mockPar2Executor := mocks.NewMockPar2Executor(ctrl)
+
+	inputDir := t.TempDir()
+	tmpDir := t.TempDir()
+	nzbFile := filepath.Join(inputDir, "input.nzb")
+
+	dataSegID := "dataSeg@test"
+	par2SegID := "par2SegDisabled@test"
+
+	nzbContent := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+<nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+ <file poster="test@example.com" date="1678886400" subject="[1/2] data.mkv yEnc (1/1)">
+  <groups><group>alt.binaries.test</group></groups>
+  <segments><segment bytes="20" number="1">%s</segment></segments>
+ </file>
+ <file poster="test@example.com" date="1678886400" subject="[2/2] data.mkv.par2 yEnc (1/1)">
+  <groups><group>alt.binaries.test</group></groups>
+  <segments><segment bytes="50" number="1">%s</segment></segments>
+ </file>
+</nzb>`, dataSegID, par2SegID)
+	require.NoError(t, os.WriteFile(nzbFile, []byte(nzbContent), 0644))
+
+	// Data segment found — threshold disabled so par2 NOT checked
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), dataSegID, gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ string, w io.Writer, _ ...func(nntppool.YEncMeta)) (*nntppool.ArticleBody, error) {
+			_, _ = w.Write([]byte("data"))
+			return &nntppool.ArticleBody{}, nil
+		}).Times(1)
+
+	// Par2 must NOT be fetched for threshold check
+	mockDownloadPool.EXPECT().BodyStream(gomock.Any(), par2SegID, gomock.Any()).Times(0)
+
+	// No Create, no Repair
+	mockPar2Executor.EXPECT().Create(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+	mockPar2Executor.EXPECT().Repair(gomock.Any(), gomock.Any()).Times(0)
+
+	err := RepairNzb(ctx, cfg, mockDownloadPool, nil, mockPar2Executor, nzbFile, "", tmpDir)
+	require.NoError(t, err)
+}
+
 func TestRepairNzb_NoPar2Files(t *testing.T) {
 	// Setup
 	ctrl := gomock.NewController(t)
