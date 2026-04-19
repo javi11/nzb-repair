@@ -417,6 +417,10 @@ func replaceBrokenSegments(
 		}
 
 		fileSize := fs.Size()
+		totalSegments := int64(nzbFile.TotalSegments)
+		// s.segment.Bytes is the yEnc-encoded article size (~10% larger than decoded binary).
+		// The repaired file contains decoded binary data, so compute offsets from actual file size.
+		decodedSegSize := (fileSize + totalSegments - 1) / totalSegments
 
 		p := pool.New().WithContext(ctx).
 			WithMaxGoroutines(cfg.UploadWorkers).
@@ -430,16 +434,23 @@ func replaceBrokenSegments(
 					return nil
 				}
 
-				// Get the segment from the file
-				buff := make([]byte, s.segment.Bytes)
-				_, err := tmpFile.ReadAt(buff, int64((s.segment.Number-1)*s.segment.Bytes))
+				// Get the segment from the file using decoded segment boundaries.
+				segNum := int64(s.segment.Number)
+				readOffset := (segNum - 1) * decodedSegSize
+				readSize := decodedSegSize
+				if segNum >= totalSegments {
+					readSize = fileSize - readOffset
+				}
+
+				buff := make([]byte, readSize)
+				_, err := tmpFile.ReadAt(buff, readOffset)
 				if err != nil {
 					slog.With("err", err).ErrorContext(ctx, "failed to read segment")
 
 					return err
 				}
 
-				partSize := int64(s.segment.Bytes)
+				partSize := readSize
 				date := time.UnixMilli(int64(nzbFile.Date))
 
 				subject := fmt.Sprintf("[%v/%v] %v - \"\" yEnc (%v/%v)", s.file.Number, nzb.TotalFiles, s.file.Filename, int64(s.segment.Number), s.file.TotalSegments)

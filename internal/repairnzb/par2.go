@@ -82,11 +82,18 @@ func (p *Par2CmdExecutor) Repair(ctx context.Context, tmpPath string) error {
 
 	par2Exe := p.ExePath
 	if par2Exe == "" {
-		par2Exe = "par2" // Default if path is empty
+		par2Exe = "par2"
 		slog.WarnContext(ctx, "Par2 executable path is empty, defaulting to 'par2'")
 	} else if !filepath.IsAbs(par2Exe) {
 		// Resolve relative paths to absolute before setting cmd.Dir, otherwise the
 		// OS resolves them relative to cmd.Dir (the tmp directory) instead of cwd.
+		if absPath, err := filepath.Abs(par2Exe); err == nil {
+			par2Exe = absPath
+		}
+	}
+	// Resolve relative file paths (./foo, ../foo, foo/bar) to absolute so they survive
+	// cmd.Dir being changed to tmpPath. Bare names like "par2" are left alone for PATH lookup.
+	if strings.ContainsRune(par2Exe, os.PathSeparator) || strings.HasPrefix(par2Exe, ".") {
 		if absPath, err := filepath.Abs(par2Exe); err == nil {
 			par2Exe = absPath
 		}
