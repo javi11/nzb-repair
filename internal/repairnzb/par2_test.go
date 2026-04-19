@@ -207,6 +207,32 @@ Done.`)
 		assert.NoError(t, err)
 	})
 
+	t.Run("Relative ExePath is resolved to absolute before exec", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		par2File := filepath.Join(tmpDir, "test.par2")
+		f, err := os.Create(par2File)
+		require.NoError(t, err)
+		_ = f.Close()
+
+		var capturedPath string
+		execCommand = func(ctx context.Context, command string, args ...string) *exec.Cmd {
+			capturedPath = command
+			cs := []string{"-test.run=TestHelperProcess", "--", "echo"}
+			cmd := exec.CommandContext(ctx, os.Args[0], cs...)
+			cmd.Env = append(os.Environ(), "GO_TEST_HELPER_PROCESS=1",
+				"TEST_PAR2_EXIT_CODE=0", "TEST_PAR2_STDOUT=", "TEST_PAR2_STDERR=")
+			return cmd
+		}
+		defer func() { execCommand = originalExecCommand }()
+
+		executor := &Par2CmdExecutor{ExePath: "./par2cmd"}
+		_ = executor.Repair(context.Background(), tmpDir)
+
+		if !filepath.IsAbs(capturedPath) {
+			t.Errorf("expected absolute path to be passed to execCommand, got %q", capturedPath)
+		}
+	})
+
 	t.Run("Empty ExePath uses default", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		par2File := filepath.Join(tmpDir, "test.par2")
