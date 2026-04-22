@@ -3,18 +3,31 @@ download_providers:
     port: 119
     username: user
     password: pass
-    ssl: true
-    max_connections: 10
-    max_connection_idle_time_in_seconds: 2400
+    tls: true
+    connections: 10
+    idle_timeout: 40m
+    skip_ping: false
+    keepalive_interval_seconds: 30
+    keepalive_command: DATE
+    user_agent: nzb-repair/1.0
+    quota_bytes: 0          # 0 = unlimited
+    quota_period_hours: 0   # 0 = no rolling window
 
 upload_providers:
   - host: upload.example.com
     port: 119
     username: user
     password: pass
-    ssl: true
-    max_connections: 5
-    max_connection_idle_time_in_seconds: 2400
+    tls: true
+    connections: 5
+    idle_timeout: 40m
+    skip_ping: false
+    keepalive_interval_seconds: 30
+    keepalive_command: DATE
+    user_agent: nzb-repair/1.0
+    quota_bytes: 0
+    quota_period_hours: 0
+
 # Scan interval for the directory watcher in duration string like "40s" "5m", "1h"
 scan_interval: 5m
 
