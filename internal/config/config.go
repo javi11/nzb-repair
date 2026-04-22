@@ -33,6 +33,19 @@ type ProviderConfig struct {
 	Backup      bool          `yaml:"backup"`
 	IdleTimeout time.Duration `yaml:"idle_timeout"`
 	SkipPing    bool          `yaml:"skip_ping"`
+	// KeepaliveIntervalSeconds, if > 0, sends a lightweight NNTP command
+	// periodically when the connection is idle. Recommended: 30–60.
+	KeepaliveIntervalSeconds int `yaml:"keepalive_interval_seconds"`
+	// KeepaliveCommand is the NNTP command used as keepalive probe.
+	// Defaults to "DATE" when empty. Ignored when KeepaliveIntervalSeconds is 0.
+	KeepaliveCommand string `yaml:"keepalive_command"`
+	// UserAgent identifies this client to the NNTP server. Empty disables it.
+	UserAgent string `yaml:"user_agent"`
+	// QuotaBytes is the maximum bytes that may be downloaded from this provider
+	// per QuotaPeriodHours. 0 means unlimited.
+	QuotaBytes int64 `yaml:"quota_bytes"`
+	// QuotaPeriodHours is the rolling window (in hours) after which the quota resets.
+	QuotaPeriodHours int `yaml:"quota_period_hours"`
 }
 
 type Config struct {

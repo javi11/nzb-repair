@@ -340,18 +340,23 @@ func toNNTPProvider(p config.ProviderConfig) nntppool.Provider {
 
 	var tlsCfg *tls.Config
 	if p.TLS {
-		tlsCfg = &tls.Config{InsecureSkipVerify: p.InsecureSSL} //nolint:gosec
+		tlsCfg = &tls.Config{InsecureSkipVerify: p.InsecureSSL, ServerName: p.Host} //nolint:gosec
 	}
 
 	return nntppool.Provider{
-		Host:        host,
-		TLSConfig:   tlsCfg,
-		Auth:        nntppool.Auth{Username: p.Username, Password: p.Password},
-		Connections: p.Connections,
-		Inflight:    p.Inflight,
-		Backup:      p.Backup,
-		IdleTimeout: p.IdleTimeout,
-		SkipPing:    p.SkipPing,
+		Host:              host,
+		TLSConfig:         tlsCfg,
+		Auth:              nntppool.Auth{Username: p.Username, Password: p.Password},
+		Connections:       p.Connections,
+		Inflight:          p.Inflight,
+		Backup:            p.Backup,
+		IdleTimeout:       p.IdleTimeout,
+		SkipPing:          p.SkipPing,
+		KeepaliveInterval: time.Duration(p.KeepaliveIntervalSeconds) * time.Second,
+		KeepaliveCommand:  p.KeepaliveCommand,
+		UserAgent:         p.UserAgent,
+		QuotaBytes:        p.QuotaBytes,
+		QuotaPeriod:       time.Duration(p.QuotaPeriodHours) * time.Hour,
 	}
 }
 
