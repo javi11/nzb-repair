@@ -1,15 +1,29 @@
 package par2exedownloader
 
 import (
+	"archive/zip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
+
+const (
+	githubReleaseURL         = "https://api.github.com/repos/animetosho/par2cmdline-turbo/releases/latest"
+	httpUserAgent            = "nzb-repair"
+	maxReleaseResponseSize   = 1 << 20
+	maxPar2AssetDownloadSize = 100 << 20
+	maxPar2BinarySize        = 100 << 20
+)
+
+var httpClient = &http.Client{Timeout: 60 * time.Second}
 
 // Release represents the structure of the GitHub release JSON response
 type Release struct {
@@ -33,14 +47,12 @@ type Release struct {
 //   - string: The name of the downloaded executable ("par2cmd")
 //   - error: Any error encountered during the download process
 func DownloadPar2Cmd() (string, error) {
-	executable := "par2cmd"
+	executable := par2CmdExecutableName()
 
 	// Fetch the latest release information from GitHub API
 	release, err := fetchLatestRelease()
 	if err != nil {
-		slog.With("err", err).Error("Error fetching latest release")
-
-		return "", err
+		return "", fmt.Errorf("fetch latest release: %w", err)
 	}
 
 	// Determine the system's OS and architecture
@@ -50,28 +62,37 @@ func DownloadPar2Cmd() (string, error) {
 	// Map system details to the appropriate asset
 	asset, err := findAssetForSystem(release, goos, goarch)
 	if err != nil {
-		slog.With("err", err).Error("Error finding asset for system")
-
-		return "", err
+		return "", fmt.Errorf("find par2cmd asset for %s/%s: %w", goos, goarch, err)
 	}
 
 	// Download the asset
-	err = downloadFile("par2cmd", asset.BrowserDownloadURL)
+	err = downloadAndInstallAsset(executable, asset)
 	if err != nil {
-		slog.With("err", err).Error("Error downloading file")
-
-		return "", err
+		return "", fmt.Errorf("download par2cmd asset %s: %w", asset.Name, err)
 	}
 
-	slog.Info(fmt.Sprintf("Downloaded %s successfully.\n", asset.Name))
+	slog.Info("Downloaded par2cmd successfully", "asset", asset.Name, "path", executable)
 
 	return executable, nil
 }
 
+func par2CmdExecutableName() string {
+	if runtime.GOOS == "windows" {
+		return "par2cmd.exe"
+	}
+
+	return "par2cmd"
+}
+
 // fetchLatestRelease retrieves the latest release information from GitHub
 func fetchLatestRelease() (*Release, error) {
-	url := "https://api.github.com/repos/animetosho/par2cmdline-turbo/releases/latest"
-	resp, err := http.Get(url)
+	req, err := http.NewRequest(http.MethodGet, githubReleaseURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", httpUserAgent)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +105,7 @@ func fetchLatestRelease() (*Release, error) {
 	}
 
 	var release Release
-	err = json.NewDecoder(resp.Body).Decode(&release)
+	err = json.NewDecoder(io.LimitReader(resp.Body, maxReleaseResponseSize)).Decode(&release)
 	if err != nil {
 		return nil, err
 	}
@@ -102,20 +123,20 @@ func findAssetForSystem(release *Release, goos, goarch string) (*struct {
 	case "linux":
 		switch goarch {
 		case "amd64":
-			assetName = "linux-amd64.xz"
+			assetName = "linux-amd64.zip"
 		case "arm64":
-			assetName = "linux-arm64.xz"
+			assetName = "linux-arm64.zip"
 		case "arm":
-			assetName = "linux-armhf.xz"
+			assetName = "linux-armhf.zip"
 		default:
 			return nil, fmt.Errorf("unsupported architecture: %s", goarch)
 		}
 	case "darwin":
 		switch goarch {
 		case "amd64":
-			assetName = "macos-x64.xz"
+			assetName = "macos-amd64.zip"
 		case "arm64":
-			assetName = "macos-arm64.xz"
+			assetName = "macos-arm64.zip"
 		default:
 			return nil, fmt.Errorf("unsupported architecture: %s", goarch)
 		}
@@ -123,8 +144,6 @@ func findAssetForSystem(release *Release, goos, goarch string) (*struct {
 		switch goarch {
 		case "amd64":
 			assetName = "win-x64.zip"
-		case "386":
-			assetName = "win-x86.zip"
 		case "arm64":
 			assetName = "win-arm64.zip"
 		default:
@@ -143,6 +162,107 @@ func findAssetForSystem(release *Release, goos, goarch string) (*struct {
 	return nil, fmt.Errorf("no asset found for %s/%s", goos, goarch)
 }
 
+func downloadAndInstallAsset(filename string, asset *struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}) error {
+	tmpDir := filepath.Dir(filename)
+	tmpFile, err := os.CreateTemp(tmpDir, filepath.Base(filename)+".*.download")
+	if err != nil {
+		return fmt.Errorf("create temp file for %s: %w", filename, err)
+	}
+	tmpPath := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file for %s: %w", filename, err)
+	}
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	if err := downloadFile(tmpPath, asset.BrowserDownloadURL); err != nil {
+		return err
+	}
+
+	if strings.HasSuffix(asset.Name, ".zip") {
+		return installPar2CmdFromZip(tmpPath, filename)
+	}
+
+	return fmt.Errorf("unsupported par2cmd asset format: %s", asset.Name)
+}
+
+func installPar2CmdFromZip(archivePath, targetPath string) error {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to open par2cmd zip %s: %w", archivePath, err)
+	}
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	for _, file := range reader.File {
+		base := path.Base(file.Name)
+		if base != "par2" && base != "par2.exe" {
+			continue
+		}
+
+		return extractZipFile(file, targetPath)
+	}
+
+	return fmt.Errorf("par2 executable not found in %s", archivePath)
+}
+
+func extractZipFile(file *zip.File, targetPath string) error {
+	if file.UncompressedSize64 > maxPar2BinarySize {
+		return fmt.Errorf("par2 binary %s exceeds maximum allowed size", file.Name)
+	}
+
+	in, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open %s in zip: %w", file.Name, err)
+	}
+	defer func() {
+		_ = in.Close()
+	}()
+
+	tmpDir := filepath.Dir(targetPath)
+	tmpFile, err := os.CreateTemp(tmpDir, filepath.Base(targetPath)+".*.extract")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for %s: %w", targetPath, err)
+	}
+	tmpPath := tmpFile.Name()
+	success := false
+	defer func() {
+		if !success {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	n, err := io.Copy(tmpFile, io.LimitReader(in, maxPar2BinarySize+1))
+	if err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("failed to extract %s to %s: %w", file.Name, targetPath, err)
+	}
+	if n > maxPar2BinarySize {
+		_ = tmpFile.Close()
+		return fmt.Errorf("par2 binary %s exceeds maximum allowed size", file.Name)
+	}
+
+	// Chmod after writing so the final mode is not affected by the process umask.
+	if err := tmpFile.Chmod(0755); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("error setting execute permission for %s: %w", tmpPath, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("failed to close extracted par2 binary %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return fmt.Errorf("failed to install par2 binary to %s: %w", targetPath, err)
+	}
+
+	success = true
+	return nil
+}
+
 // downloadFile downloads a file from the specified URL
 func downloadFile(filename, url string) error {
 	out, err := os.Create(filename)
@@ -154,7 +274,13 @@ func downloadFile(filename, url string) error {
 		_ = out.Close()
 	}()
 
-	resp, err := http.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", httpUserAgent)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -166,15 +292,12 @@ func downloadFile(filename, url string) error {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	_, err = io.Copy(out, resp.Body)
+	n, err := io.Copy(out, io.LimitReader(resp.Body, maxPar2AssetDownloadSize+1))
 	if err != nil {
 		return err
 	}
-
-	// Add execute permissions to the downloaded file
-	err = os.Chmod(filename, 0755)
-	if err != nil {
-		return fmt.Errorf("error setting execute permission for %s: %w", filename, err)
+	if n > maxPar2AssetDownloadSize {
+		return fmt.Errorf("downloaded file exceeds maximum allowed size")
 	}
 
 	return nil
