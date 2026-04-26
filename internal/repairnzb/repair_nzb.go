@@ -472,7 +472,7 @@ func replaceBrokenSegments(
 					Newsgroups: nzbFile.Groups,
 					MessageID: fmt.Sprintf("<%s>", msgId),
 					Extra: map[string][]string{
-						"Date": {date.UTC().Format(time.RFC1123)},
+						"Date": {date.UTC().Format(time.RFC1123Z)},
 					},
 				}
 
