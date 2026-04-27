@@ -451,7 +451,7 @@ func replaceBrokenSegments(
 				}
 
 				partSize := readSize
-				date := time.UnixMilli(int64(nzbFile.Date))
+				date := time.Unix(int64(nzbFile.Date), 0)
 
 				subject := fmt.Sprintf("[%v/%v] %v - \"\" yEnc (%v/%v)", s.file.Number, nzb.TotalFiles, s.file.Filename, int64(s.segment.Number), s.file.TotalSegments)
 
@@ -467,13 +467,11 @@ func replaceBrokenSegments(
 				msgId := generateRandomMessageID()
 
 				headers := nntppool.PostHeaders{
-					From:      nzbFile.Poster,
-					Subject:   subject,
+					From:       nzbFile.Poster,
+					Subject:    subject,
 					Newsgroups: nzbFile.Groups,
-					MessageID: fmt.Sprintf("<%s>", msgId),
-					Extra: map[string][]string{
-						"Date": {date.UTC().Format(time.RFC1123Z)},
-					},
+					MessageID:  fmt.Sprintf("<%s>", msgId),
+					Date:       date.UTC(),
 				}
 
 				meta := rapidyenc.Meta{
