@@ -130,6 +130,7 @@ func uploadPar2Files(
 					FileSize:   fileSize,
 					PartSize:   int64(len(chunk)),
 					PartNumber: int64(segNum),
+					Offset:     int64(start),
 					TotalParts: int64(totalSegments),
 				}
 				if _, err := uploadPool.PostYenc(ctx, headers, bytes.NewReader(chunk), meta); err != nil {
